@@ -5,7 +5,7 @@ Pré-requisitos (banco vazio, FAKE_NOW numa quinta-feira):
   # painel (dono do banco), com senha de acesso extra
   APP_ROLE=admin DATABASE_URL=postgres://dono@.../olhar_e2e FAKE_NOW=2026-10-08T14:00:00Z PORT=3101 \
   ADMIN_EMAIL=admin@e2e.local ADMIN_INITIAL_PASSWORD=SenhaInicial2026 \
-  ADMIN_GATE_USER=clinica ADMIN_GATE_PASSWORD=porta-de-acesso-2026 PUBLIC_SITE_URL=http://127.0.0.1:3100 node server.js
+  PUBLIC_SITE_URL=http://127.0.0.1:3100 node server.js   (sem senha extra: login individual por e-mail e senha)
   # site público (usuário restrito criado com npm run db:public-user)
   APP_ROLE=public DATABASE_URL=postgres://olhar_site@.../olhar_e2e FAKE_NOW=2026-10-08T14:00:00Z PORT=3100 node server.js
 
@@ -20,7 +20,7 @@ from playwright.sync_api import sync_playwright
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:3100"      # site público
 ADMIN = sys.argv[2] if len(sys.argv) > 2 else "http://127.0.0.1:3101"     # painel privado
 SHOTS = Path(sys.argv[3] if len(sys.argv) > 3 else "e2e-shots")
-GATE = {"username": "clinica", "password": "porta-de-acesso-2026"}
+INTEGR_PW = "SenhaDasIntegracoes#2026"
 SHOTS.mkdir(parents=True, exist_ok=True)
 ADMIN_EMAIL = "admin@e2e.local"
 INITIAL_PW = "SenhaInicial2026"
@@ -76,10 +76,12 @@ with sync_playwright() as p:
     home_html = probe.request.get(BASE + "/").text().lower()
     check("Site público: nenhum link de login/painel", all(w not in home_html for w in ["/admin", "login", "painel"]))
     r = probe.request.get(ADMIN + "/")
-    check("Painel: sem a senha de acesso extra → 401", r.status == 401, str(r.status))
+    check("Painel: abre direto na tela de login (sem senha extra compartilhada)", r.status == 200 and not r.headers.get("www-authenticate"), str(r.status))
+    r = probe.request.get(ADMIN + "/api/admin/appointments")
+    check("Painel: dados bloqueados sem login (401)", r.status == 401, str(r.status))
     probe.close()
 
-    admin = browser.new_context(viewport={"width": 1366, "height": 860}, locale="pt-BR", http_credentials=GATE)
+    admin = browser.new_context(viewport={"width": 1366, "height": 860}, locale="pt-BR", )
     ap = admin.new_page()
     block_external(ap)
     ap.goto(ADMIN + "/")
@@ -119,7 +121,13 @@ with sync_playwright() as p:
     clinic = dict(s["clinic"], whatsapp="92991234567")
     st1, _ = api(admin, "PUT", "/api/admin/settings/clinic", clinic)
     st2, _ = api(admin, "PUT", "/api/admin/settings/booking", dict(s["booking"], enabled=True))
-    st3, _ = api(admin, "PUT", "/api/admin/settings/meta", dict(s["meta"], pixel_enabled=True, pixel_id="123456789012345"))
+    # Integrações: senha exclusiva criada no primeiro acesso (a sessão que cria fica desbloqueada)
+    stI, setup = api(admin, "POST", "/api/admin/integrations/setup", {"password": INTEGR_PW, "confirm": INTEGR_PW})
+    check("Integrações: senha exclusiva criada no primeiro acesso (com código de recuperação)", stI == 201 and len(setup.get("recoveryCode", "")) == 23, str(stI))
+    RECOVERY = setup.get("recoveryCode")
+    _, integ = api(admin, "GET", "/api/admin/integrations")
+    st3, _ = api(admin, "PUT", "/api/admin/settings/meta", dict(integ["meta"], pixel_enabled=True, pixel_id="123456789012345"))
+    st_name, _ = api(admin, "PATCH", "/api/admin/me", {"name": "Igor Gabriel"})
     st4, _ = api(admin, "PUT", "/api/admin/settings/social_proof", dict(s["social_proof"], enabled=True))
     check("Admin: configurações (WhatsApp, agendamento, Pixel, avisos) salvas", (st1, st2, st3, st4) == (200, 200, 200, 200), str((st1, st2, st3, st4)))
 
@@ -318,7 +326,8 @@ with sync_playwright() as p:
 
     # Avisos discretos (somente autorizados): Mariana autorizou
     st, act = api(pg2ctx, "GET", "/api/activity")
-    names = [a.get("firstName") for a in act.get("items", [])]
+    names = [a.get("firstName") for a in act.get("items", []) if a.get("kind") != "info"]
+    check("Pop-ups: mensagens institucionais sem pacientes", all(not a.get("firstName") for a in act.get("items", []) if a.get("kind") == "info") and any(a.get("kind") == "info" for a in act.get("items", [])))
     check("Avisos de atividade: só quem autorizou (Mariana sim; Joana/Carlos não)", names == ["Mariana"], str(act)[:200])
 
     # ------------------------------------------------------------------ Responsividade
@@ -447,8 +456,10 @@ with sync_playwright() as p:
     check("Lista: busca por protocolo encontra o agendamento", row and row["protocol"] == protocol)
     check("Lista: origem do anúncio registrada (UTMs + fbclid)", row and "facebook" in json.dumps(row).lower() and "Exame Gratis Manaus" in json.dumps(row), json.dumps(row.get("attribution") if row else {})[:200])
 
-    st, cfg = api(admin, "GET", "/api/admin/settings")
+    st, cfg = api(admin, "GET", "/api/admin/integrations")
     check("Painel enxerga o estado do site público (serviço separado)", cfg["env"]["separate"] and cfg["env"]["seenAt"], json.dumps(cfg["env"]))
+    st, cfg2 = api(admin, "GET", "/api/admin/settings")
+    check("Configurações gerais não expõem Pixel/API de Conversões", "meta" not in cfg2["settings"] and "env" not in cfg2, ",".join(cfg2["settings"].keys()))
 
     # Telas do painel
     for hash_, name in [("#/agendamentos", "admin-03-agendamentos"), ("#/agenda", "admin-04-agenda"), ("#/configuracoes", "admin-05-configuracoes"), ("#/integracoes", "admin-06-integracoes")]:
@@ -468,7 +479,7 @@ with sync_playwright() as p:
     check("Exportação CSV", r.status == 200 and "Protocolo" in r.text() and protocol in r.text(), str(r.status))
 
     # Admin mobile
-    am = browser.new_context(viewport={"width": 390, "height": 844}, locale="pt-BR", storage_state=admin.storage_state(), http_credentials=GATE)
+    am = browser.new_context(viewport={"width": 390, "height": 844}, locale="pt-BR", storage_state=admin.storage_state())
     amp = am.new_page()
     block_external(amp)
     amp.goto(ADMIN + "/#/agendamentos")
@@ -495,6 +506,109 @@ with sync_playwright() as p:
     sw3 = amp.evaluate("() => document.documentElement.scrollWidth")
     check("Painel celular: configurações sem campos cortados", sw3 <= 390, f"scrollWidth={sw3}")
     amp.screenshot(path=str(SHOTS / "admin-11-mobile-config.png"), full_page=True)
+
+    # ------------------------------------------------------------------ Saudação pelo horário de Manaus
+    gctx = browser.new_context(viewport={"width": 1280, "height": 800}, locale="pt-BR", storage_state=admin.storage_state())
+    gp = gctx.new_page(); block_external(gp)
+    for utc, expect in [("2026-10-09T13:00:00Z", "Bom dia, Igor!"), ("2026-10-09T18:30:00Z", "Boa tarde, Igor!"), ("2026-10-09T23:10:00Z", "Boa noite, Igor!"), ("2026-10-09T08:30:00Z", "Boa noite, Igor!")]:
+        gp.close(); gp = gctx.new_page(); block_external(gp)
+        gp.clock.set_fixed_time(utc)
+        gp.goto(ADMIN + "/#/painel"); gp.wait_for_selector("#greet:not(:empty)", timeout=5000)
+        g = gp.inner_text("#greet")
+        check(f"Saudação {utc[11:16]} UTC (Manaus {int(utc[11:13]) - 4:02d}{utc[13:16]}): {expect}", g == expect, g)
+    check("Saudação: data atual em português", "outubro de 2026" in gp.inner_text("#greet-date"), gp.inner_text("#greet-date"))
+    gp.close()
+    gp = gctx.new_page(); block_external(gp)
+    gp.clock.install(time="2026-10-09T15:59:20Z")  # 11:59:20 em Manaus
+    gp.goto(ADMIN + "/#/painel"); gp.wait_for_selector("#greet:not(:empty)", timeout=5000)
+    before_g = gp.inner_text("#greet")
+    gp.clock.run_for(60000)
+    after_g = gp.inner_text("#greet")
+    check("Saudação muda sozinha na virada do período (bom dia → boa tarde)", before_g == "Bom dia, Igor!" and after_g == "Boa tarde, Igor!", f"{before_g} → {after_g}")
+    gp.screenshot(path=str(SHOTS / "admin-12-saudacao.png"))
+    gctx.close()
+    mg = browser.new_context(viewport={"width": 360, "height": 780}, locale="pt-BR", storage_state=admin.storage_state())
+    mgp = mg.new_page(); block_external(mgp); mgp.goto(ADMIN + "/#/painel"); mgp.wait_for_selector("#greet:not(:empty)", timeout=5000)
+    gb = mgp.locator("#greet").bounding_box()
+    check("Saudação no celular (360px) sem quebrar o layout", mgp.evaluate("() => document.documentElement.scrollWidth") <= 360 and gb["height"] < 70, str(gb))
+    mgp.screenshot(path=str(SHOTS / "admin-13-saudacao-celular.png"))
+    mg.close()
+
+    # ------------------------------------------------------------------ Integrações protegidas (tela)
+    ic = browser.new_context(viewport={"width": 1280, "height": 860}, locale="pt-BR")
+    ip = ic.new_page(); block_external(ip)
+    ip.goto(ADMIN + "/"); ip.wait_for_selector('input[name="email"]')
+    ip.fill('input[name="email"]', ADMIN_EMAIL); ip.fill('input[name="password"]', NEW_PW); ip.click("form button.primary")
+    ip.wait_for_selector("#greet", timeout=6000)
+    ip.goto(ADMIN + "/#/integracoes"); ip.wait_for_selector(".lock-card", timeout=5000)
+    lock_txt = ip.inner_text(".lock-card")
+    check("Integrações: nova sessão mostra ÁREA PROTEGIDA", "ÁREA PROTEGIDA" in lock_txt and "DESBLOQUEAR INTEGRAÇÕES" in lock_txt, lock_txt[:80])
+    ip.fill('#unlock input[name="password"]', "senha-errada-123")
+    ip.click("[data-eye]")
+    check("Integrações: botão mostrar/ocultar senha", ip.get_attribute('#unlock input[name="password"]', "type") == "text")
+    ip.screenshot(path=str(SHOTS / "admin-14-integracoes-bloqueadas.png"))
+    ip.click("#unlock button.primary"); ip.wait_for_selector("#un-err:not([hidden])", timeout=4000)
+    check("Integrações: senha errada recusada", "incorreta" in ip.inner_text("#un-err"), ip.inner_text("#un-err"))
+    ip.fill('#unlock input[name="password"]', INTEGR_PW); ip.click("#unlock button.primary")
+    ip.wait_for_selector("#isec", timeout=5000)
+    check("Integrações: desbloqueio com a senha exclusiva", "SEGURANÇA DAS INTEGRAÇÕES" in ip.inner_text("#isec"))
+    page_txt = ip.inner_text("#main")
+    check("Integrações: token nunca exibido, só o status", "configurado" in page_txt and "EAAB" not in ip.content())
+    ip.screenshot(path=str(SHOTS / "admin-15-integracoes.png"), full_page=True)
+    ip.click("#relock"); ip.wait_for_selector(".lock-card", timeout=4000)
+    check("Integrações: 'Bloquear agora' volta à área protegida", True)
+    ic.close()
+    mi = browser.new_context(viewport={"width": 375, "height": 760}, locale="pt-BR", storage_state=admin.storage_state())
+    mip = mi.new_page(); block_external(mip)
+    api(admin, "POST", "/api/admin/integrations/lock")
+    mip.goto(ADMIN + "/#/integracoes"); mip.wait_for_selector(".lock-card", timeout=5000)
+    check("Integrações no celular sem rolagem horizontal", mip.evaluate("() => document.documentElement.scrollWidth") <= 375)
+    mip.screenshot(path=str(SHOTS / "admin-16-integracoes-celular.png"))
+    mi.close()
+
+    # ------------------------------------------------------------------ Convite de administrador (tela) e permissões
+    ap.goto(ADMIN + "/#/administradores"); ap.wait_for_selector("#add-admin", timeout=5000)
+    check("Administradores: tabela Nome/E-mail/Permissão/Status/Último acesso", all(h in ap.inner_text(".t-admins thead") for h in ["Nome", "E-mail", "Permissão", "Status", "Último acesso"]))
+    ap.click("#add-admin"); ap.wait_for_selector("#inv-form")
+    ap.fill('#inv-form input[name="name"]', "Teste Convite E2E"); ap.fill('#inv-form input[name="email"]', "convite.e2e@teste.local")
+    ap.click("#inv-form button.primary"); ap.wait_for_selector("#inv-link", timeout=5000)
+    link = ap.input_value("#inv-link")
+    check("Convite: link gerado (uso único, 24 h, sem senha pronta)", "#/convite/" in link and "24 horas" in ap.inner_text("#modal"), link[:60])
+    ap.screenshot(path=str(SHOTS / "admin-17-convite.png"))
+    ap.click("[data-ok]")
+    ap.wait_for_timeout(600)
+    check("Administradores: convite pendente na lista", "Convite pendente" in ap.inner_text(".t-admins"))
+    ap.screenshot(path=str(SHOTS / "admin-18-administradores.png"), full_page=True)
+
+    nctx = browser.new_context(viewport={"width": 390, "height": 844}, locale="pt-BR", is_mobile=True, has_touch=True)
+    np_ = nctx.new_page(); block_external(np_)
+    np_.goto(link); np_.wait_for_selector("#accept", timeout=5000)
+    np_.screenshot(path=str(SHOTS / "admin-19-ativar-convite.png"))
+    np_.fill('#accept input[name="email"]', "convite.e2e@teste.local")
+    np_.fill('#accept input[name="password"]', "SenhaDoConvite2026"); np_.fill('#accept input[name="confirm"]', "SenhaDoConvite2026")
+    np_.click("#accept button.primary"); np_.wait_for_selector("#login", timeout=5000)
+    check("Convite: conta ativada e link removido da barra de endereço", "convite" not in np_.url, np_.url)
+    np_.goto(link); np_.wait_for_selector(".auth-card h1", timeout=5000)
+    check("Convite: link não funciona duas vezes", "indisponível" in np_.inner_text(".auth-card h1"))
+    np_.goto(ADMIN + "/#/painel"); np_.wait_for_selector('input[name="email"]')
+    np_.fill('input[name="email"]', "convite.e2e@teste.local"); np_.fill('input[name="password"]', "SenhaDoConvite2026"); np_.click("form button.primary")
+    np_.wait_for_selector("#greet", timeout=6000)
+    nav = np_.text_content("#side .nav")  # menu recolhido no celular (oculto até abrir)
+    check("Novo administrador entra e não vê Integrações nem Administradores", "Integrações" not in nav and "Administradores" not in nav and "Agendamentos" in nav, nav.replace("\n", " | "))
+    np_.goto(ADMIN + "/#/integracoes"); np_.wait_for_timeout(800)
+    check("Administrador comum: URL direta das Integrações → acesso negado", "Acesso negado" in np_.inner_text("#main"))
+    for m_, path_ in [("GET", "/api/admin/integrations"), ("POST", "/api/admin/integrations/unlock"), ("GET", "/api/admin/admins"), ("GET", "/api/admin/audit")]:
+        rr = nctx.request.fetch(ADMIN + path_, method=m_, headers={"x-olhar-csrf": "1", "content-type": "application/json"}, data=json.dumps({"password": INTEGR_PW}) if m_ == "POST" else None)
+        check(f"Administrador comum: {m_} {path_} → 403", rr.status == 403, str(rr.status))
+    # Desativar encerra a sessão na hora
+    st, adm_list = api(admin, "GET", "/api/admin/admins")
+    new_id = [a for a in adm_list["admins"] if a["email"] == "convite.e2e@teste.local"][0]["id"]
+    st, _ = api(admin, "PATCH", f"/api/admin/admins/{new_id}", {"disabled": True})
+    rr = nctx.request.get(ADMIN + "/api/admin/dashboard")
+    check("Desativar acesso encerra a sessão do administrador", st == 200 and rr.status == 401, f"{st} {rr.status}")
+    st, _ = api(admin, "DELETE", f"/api/admin/admins/{new_id}")
+    check("Remover administrador de teste", st == 200, str(st))
+    nctx.close()
 
     # ------------------------------------------------------------------ Sem vagas: bloquear as duas datas
     for d in ["2026-10-08", "2026-10-09", "2026-10-10"]:

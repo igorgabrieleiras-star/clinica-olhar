@@ -192,6 +192,8 @@ test('Banco: usuário do site público tem apenas as permissões mínimas', asyn
     // Negado (dados e operações administrativas)
     await denied('SELECT * FROM admins');
     await denied('SELECT * FROM admin_sessions');
+    await denied('SELECT * FROM admin_invites');
+    await denied('SELECT * FROM integration_security');
     await denied('SELECT * FROM audit_log');
     await denied('SELECT * FROM consents');
     await denied('SELECT * FROM attributions');

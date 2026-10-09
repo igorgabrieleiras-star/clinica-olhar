@@ -678,7 +678,7 @@
   (function socialProof() {
     if (!boot.socialProof) return;
     var toast = $('[data-toast]');
-    var queue = [], shown = 0, MAX = 4, hideT = null, tries = 0;
+    var queue = [], shown = 0, MAX = 5, hideT = null, tries = 0;
     var GUARDED = 'input, select, textarea, button, a.btn, .calendar, .time-grid, .today-box, .cookie:not([hidden])';
     function overlaps(r) {
       return $$(GUARDED).some(function (el) {
@@ -703,10 +703,18 @@
     function next() {
       if (shown >= MAX || !queue.length) return;
       var it = queue[0];
+      var info = it.kind === 'info'; // aviso institucional da clínica (nunca simula pacientes)
+      toast.classList.toggle('is-info', info);
       toast.innerHTML = '<span class="t-ico" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M5 10.5l3.2 3.2L15 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>' +
-        '<span><b></b> <span data-what></span>.<small>' + (it.demo ? 'Demonstração · ' : '') + ago(it.minutesAgo) + '</small></span>';
-      toast.querySelector('b').textContent = it.firstName;
-      toast.querySelector('[data-what]').textContent = (it.action || 'agendou seu exame') + (it.when ? ' ' + it.when : '');
+        (info ? '<span><span data-what></span><small data-sub></small></span>'
+          : '<span><b></b> <span data-what></span>.<small>' + (it.demo ? 'Demonstração · ' : '') + ago(it.minutesAgo) + '</small></span>');
+      if (info) {
+        toast.querySelector('[data-what]').textContent = it.text;
+        toast.querySelector('[data-sub]').textContent = it.sub || '';
+      } else {
+        toast.querySelector('b').textContent = it.firstName;
+        toast.querySelector('[data-what]').textContent = (it.action || 'agendou seu exame') + (it.when ? ' ' + it.when : '');
+      }
       // Mede a posição sem exibir: só aparece se houver espaço livre.
       toast.style.visibility = 'hidden'; toast.hidden = false;
       var r = toast.getBoundingClientRect();
@@ -720,7 +728,7 @@
       toast.hidden = false;
       requestAnimationFrame(function () { requestAnimationFrame(function () { toast.classList.add('show'); }); });
       hideT = setTimeout(hide, 4000);
-      setTimeout(next, 20000);
+      setTimeout(next, 15000 + Math.round(Math.random() * 13000)); // intervalos variados (15 a 28 s)
     }
     setTimeout(function () {
       fetch('/api/activity').then(function (r) { return r.json(); }).then(function (d) { queue = (d.items || []).slice(0, MAX); next(); }).catch(function () {});

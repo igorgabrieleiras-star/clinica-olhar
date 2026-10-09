@@ -98,9 +98,10 @@ export function registerPublic(router) {
   // Dados mínimos: primeiro nome, dia relativo e hora. Nada de sobrenome, idade, telefone ou protocolo.
   router.get('/api/activity', async (req, res) => {
     const settings = await getSettings();
-    if (!settings.social_proof.enabled) return json(req, res, 200, { items: [] });
+    const sp = settings.social_proof;
+    if (!sp.enabled && sp.institutional === false) return json(req, res, 200, { items: [] });
     const hours = Math.min(168, Math.max(1, Number(settings.social_proof.max_age_hours) || 48));
-    const { rows } = await q(
+    const { rows } = !sp.enabled ? { rows: [] } : await q(
       `SELECT p.name, a.date, a.time, extract(epoch FROM (now() - a.created_at))::int AS seconds
          FROM appointments a JOIN patients p ON p.id = a.patient_id
         WHERE a.social_proof_ok AND a.status <> 'CANCELADO' AND p.anonymized_at IS NULL
@@ -120,12 +121,31 @@ export function registerPublic(router) {
         { firstName: 'Mariana', when: 'para sábado, às 10h', minutesAgo: 3, demo: true },
         { firstName: 'Carlos', action: 'concluiu seu cadastro', minutesAgo: 6, demo: true },
         { firstName: 'Fernanda', action: 'confirmou seu exame', when: 'para amanhã, às 15h', minutesAgo: 12, demo: true },
-        { firstName: 'João', action: 'realizou seu agendamento', when: 'para quinta-feira, às 11h', minutesAgo: 25, demo: true },
+        { firstName: 'João', action: 'agendou', when: 'para quinta-feira, às 11h', minutesAgo: 25, demo: true },
       ];
     }
+    // Mensagens institucionais (verdadeiras, sem pacientes): complementam os avisos reais.
+    if (sp.institutional !== false) items = items.concat(await institutionalItems());
     json(req, res, 200, { items }, { 'cache-control': 'public, max-age=30' });
   });
 
+}
+
+/** Avisos da clínica para os pop-ups: nunca simulam pacientes. Os dias citados vêm da agenda real. */
+export async function institutionalItems() {
+  const av = await publicAvailability(now());
+  const words = [];
+  for (const d of av.dates || []) {
+    if (!d.available) continue;
+    for (const k of d.kinds || [d.kind]) { const w = k === 'hoje' ? 'hoje' : k === 'amanha' ? 'amanhã' : 'sábado'; if (!words.includes(w)) words.push(w); }
+  }
+  const items = [{ kind: 'info', text: 'Exame de vista 100% gratuito.', sub: 'Agende em poucos minutos' }];
+  if (av.enabled && av.total > 0 && words.length) {
+    items.push({ kind: 'info', text: `Horários disponíveis para ${words.length === 1 ? words[0] : words.slice(0, -1).join(', ') + ' e ' + words.at(-1)}.`, sub: 'Agendamentos abertos' });
+  }
+  items.push({ kind: 'info', text: 'Confirmação na hora, com número de protocolo.', sub: 'Clínica Olhar' });
+  items.push({ kind: 'info', text: 'Seus dados protegidos conforme a LGPD.', sub: 'Clínica Olhar' });
+  return items;
 }
 
 /** Rotas presentes nos dois serviços (site e painel). */

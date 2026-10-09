@@ -168,7 +168,7 @@ Com VPN (WireGuard/Tailscale), basta não publicar `gestao.…` na internet e us
 
 ## 5. Protegendo o painel (camada extra obrigatória em produção)
 
-Escolha pelo menos uma; podem ser combinadas.
+O painel usa **login individual por e-mail e senha** (bloqueio após tentativas, sessões HttpOnly/Secure, autorização no servidor e níveis de acesso). As camadas abaixo são **opcionais** e podem ser combinadas — a mais indicada é o Cloudflare Access, que não usa senha compartilhada.
 
 **A) Cloudflare Access — recomendado (controle de identidade, gratuito até 50 usuários)**
 1. Coloque o DNS do domínio na Cloudflare e crie o registro de `gestao.…` com o proxy ativo (nuvem laranja).
@@ -180,7 +180,14 @@ O servidor valida o token de cada requisição; quem tentar acessar o servidor p
 
 **B) IPs permitidos** — `ADMIN_ALLOWED_IPS=200.150.10.20,10.8.0.0/24` (IP fixo da clínica, faixa da VPN). Fora da lista: 404.
 
-**C) Senha de acesso** — `ADMIN_GATE_USER` e `ADMIN_GATE_PASSWORD` (16+ caracteres). O navegador pede antes da tela de login; 20 erros em 15 min bloqueiam o IP temporariamente.
+**C) Senha de acesso compartilhada (não recomendada)** — `ADMIN_GATE_USER` e `ADMIN_GATE_PASSWORD`. Mantida só por compatibilidade; prefira A ou B.
+
+### Administradores e Integrações
+
+- **Níveis:** *Administrador principal* (tudo, inclusive administradores e Integrações) e *Administrador* (agendamentos, pacientes, agenda, lista de espera e configurações do site).
+- **Convites:** em *Administradores → + ADICIONAR ADMINISTRADOR* é gerado um link de uso único, válido por 24 h. A pessoa confirma o e-mail e cria a própria senha. Só o hash do token é gravado.
+- **Integrações:** protegidas por uma senha exclusiva criada pelo administrador principal no primeiro acesso (com código de recuperação exibido uma vez). O desbloqueio vale para a sessão e expira após 10 min sem uso. Tokens (ex.: API de Conversões) ficam nas variáveis do Railway e nunca vão ao navegador.
+- **Recuperação:** senha da conta + código de recuperação. Sem o código: `npm run integrations:reset -- --confirmar` no terminal do serviço do painel.
 
 ---
 

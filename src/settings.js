@@ -24,7 +24,8 @@ export const DEFAULTS = {
     minor_rule: 'guardian_required', // guardian_required | allowed | blocked
   },
   social_proof: {
-    enabled: false,
+    enabled: false, // avisos de agendamentos reais (somente de quem autorizou)
+    institutional: true, // avisos institucionais da clínica (sem pacientes)
     max_age_hours: 48,
   },
   meta: {

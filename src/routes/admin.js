@@ -7,6 +7,11 @@ import { login, logout, sessionAdmin, changePassword, SESSION_COOKIE, SESSION_HO
 import { todayISO, addDays, publicCandidateDates, isISODate, formatLongDate, timeToMinutes } from '../dates.js';
 import { cleanName, cleanAge, cleanWhatsapp, cleanTime, ValidationError, formatWhatsapp } from '../validate.js';
 import { json, readJson, parseCookies, setCookie, clientIp, rateLimit, HttpError, send } from '../http.js';
+import {
+  ROLES, listAdmins, createInvite, resendInvite, revokeInvite, inviteInfo, acceptInvite, updateAdmin, removeAdmin,
+  cleanEmail, cleanAdminName, integrationStatus, setupIntegrationPassword, checkIntegrationPassword, unlockSession,
+  touchUnlock, lockSession, revokeIntegrationSessions, changeIntegrationPassword, resetIntegrationPassword, INVITE_HOURS,
+} from '../admins.js';
 
 const STATUSES = ['NOVO', 'CONFIRMADO', 'CONTATADO', 'COMPARECEU', 'NAO_COMPARECEU', 'CANCELADO'];
 
@@ -16,19 +21,47 @@ async function audit(adminId, action, entity, entityId, details) {
   ]);
 }
 
-/** Exige sessão válida; para métodos que alteram dados, exige também o cabeçalho anti-CSRF e origem própria. */
-async function requireAdmin(req, { allowPasswordChange = false } = {}) {
+/** Bloqueia requisições de outros sites: cabeçalho anti-CSRF obrigatório e origem própria. */
+function checkCsrf(req) {
+  if (req.method === 'GET' || req.method === 'HEAD') return;
+  if (req.headers['x-olhar-csrf'] !== '1') throw new HttpError(403, 'Requisição bloqueada.', 'CSRF');
+  const origin = req.headers.origin;
+  if (origin && new URL(origin).host !== req.headers.host) throw new HttpError(403, 'Origem não permitida.', 'CSRF');
+}
+
+/**
+ * Exige sessão válida (conta ativa). Toda autorização é decidida aqui, no servidor, a cada requisição.
+ * principal: true → somente o administrador principal (administradores comuns recebem 403).
+ */
+async function requireAdmin(req, { allowPasswordChange = false, principal = false } = {}) {
   const token = parseCookies(req)[SESSION_COOKIE];
   const admin = await sessionAdmin(token);
   if (!admin) throw new HttpError(401, 'Sua sessão expirou. Entre novamente.', 'UNAUTHENTICATED');
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    if (req.headers['x-olhar-csrf'] !== '1') throw new HttpError(403, 'Requisição bloqueada.', 'CSRF');
-    const origin = req.headers.origin;
-    if (origin && new URL(origin).host !== req.headers.host) throw new HttpError(403, 'Origem não permitida.', 'CSRF');
-  }
+  checkCsrf(req);
   if (admin.mustChangePassword && !allowPasswordChange) throw new HttpError(403, 'Troque a senha inicial para continuar.', 'MUST_CHANGE_PASSWORD');
+  if (principal && admin.role !== 'principal') throw new HttpError(403, 'Acesso negado. Esta área é exclusiva do administrador principal.', 'FORBIDDEN');
   admin.token = token;
   return admin;
+}
+
+/** Área de Integrações: administrador principal + senha exclusiva desbloqueada nesta sessão (expira após 10 min sem uso). */
+async function requireIntegrations(req) {
+  const admin = await requireAdmin(req, { principal: true });
+  const st = await integrationStatus(admin);
+  if (!st.configured) throw new HttpError(423, 'Crie a senha de Integrações para continuar.', 'INTEGRATIONS_SETUP');
+  if (!(await touchUnlock(admin.sessionId))) throw new HttpError(423, 'Área protegida. Confirme sua senha de Integrações.', 'INTEGRATIONS_LOCKED');
+  return admin;
+}
+
+/** Identificador numérico da URL; inválido → 404 (nunca chega ao banco). */
+function idParam(v) {
+  const n = Number(v);
+  if (!Number.isSafeInteger(n) || n <= 0) throw new HttpError(404, 'Registro não encontrado.', 'NOT_FOUND');
+  return n;
+}
+
+function meView(a) {
+  return { id: a.id, email: a.email, name: a.name, role: a.role, roleLabel: ROLES[a.role], principal: a.role === 'principal', mustChangePassword: a.mustChangePassword };
 }
 
 function intOrNull(v, min, max, field) {
@@ -161,7 +194,7 @@ function sanitizeSection(key, input) {
       };
     }
     case 'social_proof':
-      return { enabled: bool(i.enabled), max_age_hours: intOrNull(i.max_age_hours, 1, 168, 'max_age_hours') ?? 48 };
+      return { enabled: bool(i.enabled), institutional: i.institutional === undefined ? d.institutional : bool(i.institutional), max_age_hours: intOrNull(i.max_age_hours, 1, 168, 'max_age_hours') ?? 48 };
     case 'meta': {
       const pixel = str(i.pixel_id, 30);
       if (pixel && !/^\d{6,20}$/.test(pixel)) throw new ValidationError('pixel_id', 'O ID do Pixel tem apenas números.');
@@ -196,11 +229,12 @@ export function registerAdmin(router) {
     const body = await readJson(req, 4096);
     const result = await login(body.email, body.password);
     if (!result.ok) {
+      await audit(null, 'login_failed', 'admin', null, { ip });
       const msg = result.reason === 'locked' ? 'Acesso bloqueado temporariamente após várias tentativas. Tente em 15 minutos.' : 'E-mail ou senha incorretos.';
       throw new HttpError(401, msg, 'LOGIN_FAILED');
     }
     await audit(result.admin.id, 'login', 'admin', result.admin.id);
-    json(req, res, 200, { ok: true, admin: result.admin }, {
+    json(req, res, 200, { ok: true, admin: meView(result.admin) }, {
       'set-cookie': setCookie(SESSION_COOKIE, result.token, { maxAge: SESSION_HOURS * 3600 }),
     });
   });
@@ -212,7 +246,18 @@ export function registerAdmin(router) {
 
   router.get('/api/admin/me', async (req, res) => {
     const admin = await requireAdmin(req, { allowPasswordChange: true });
-    json(req, res, 200, { admin: { id: admin.id, email: admin.email, name: admin.name, mustChangePassword: admin.mustChangePassword } });
+    json(req, res, 200, { admin: meView(admin) });
+  });
+
+  // Nome exibido na saudação do painel (cada administrador edita o seu).
+  router.patch('/api/admin/me', async (req, res) => {
+    const admin = await requireAdmin(req);
+    const body = await readJson(req, 2048);
+    const name = cleanAdminName(body.name);
+    if (!name) throw new ValidationError('name', 'Informe seu nome (2 a 80 caracteres).');
+    await q('UPDATE admins SET name = $2 WHERE id = $1', [admin.id, name]);
+    await audit(admin.id, 'profile_name_changed', 'admin', admin.id);
+    json(req, res, 200, { ok: true, admin: meView({ ...admin, name }) });
   });
 
   router.post('/api/admin/password', async (req, res) => {
@@ -505,20 +550,17 @@ export function registerAdmin(router) {
   // ----- Configurações -----
   router.get('/api/admin/settings', async (req, res) => {
     await requireAdmin(req);
-    const settings = await getSettings({ fresh: true });
+    const { meta: _integrations, ...settings } = await getSettings({ fresh: true }); // Meta Pixel/API ficam só na área protegida
     const { rows: logo } = await q("SELECT mime, updated_at FROM media WHERE key = 'logo'");
-    const { rows: metaLog } = await q(`SELECT m.event_name, m.status, left(m.response, 300) AS response, to_char(m.created_at AT TIME ZONE 'America/Manaus', 'DD/MM HH24:MI') AS at, a.protocol
-                                         FROM meta_events m LEFT JOIN appointments a ON a.id = m.appointment_id ORDER BY m.id DESC LIMIT 10`);
     json(req, res, 200, {
       settings,
-      env: await siteStatus(),
       logo: logo[0] ? { mime: logo[0].mime, version: new Date(logo[0].updated_at).getTime() } : null,
-      metaLog,
     });
   });
 
   router.put('/api/admin/settings/:section', async (req, res, { params }) => {
-    const admin = await requireAdmin(req);
+    // Meta Pixel e API de Conversões: somente o administrador principal, com a área de Integrações desbloqueada.
+    const admin = params.section === 'meta' ? await requireIntegrations(req) : await requireAdmin(req);
     const body = await readJson(req);
     const current = await getSettings({ fresh: true });
     // Agendamento: campos não enviados mantêm o valor atual (o painel pode salvar só parte das opções).
@@ -617,9 +659,171 @@ export function registerAdmin(router) {
   });
 
   router.get('/api/admin/audit', async (req, res) => {
-    await requireAdmin(req);
+    await requireAdmin(req, { principal: true });
     const { rows } = await q(`SELECT l.action, l.entity, l.entity_id, to_char(l.created_at AT TIME ZONE 'America/Manaus', 'DD/MM/YYYY HH24:MI') AS at, a.email
                                 FROM audit_log l LEFT JOIN admins a ON a.id = l.admin_id ORDER BY l.id DESC LIMIT 200`);
     json(req, res, 200, { items: rows });
+  });
+
+  // ----- Gerenciar administradores (somente o administrador principal) -----
+  router.get('/api/admin/admins', async (req, res) => {
+    const admin = await requireAdmin(req, { principal: true });
+    json(req, res, 200, { ...(await listAdmins()), me: admin.id, roles: ROLES, inviteHours: INVITE_HOURS, emailConfigured: false });
+  });
+
+  router.post('/api/admin/invites', async (req, res) => {
+    const admin = await requireAdmin(req, { principal: true });
+    const body = await readJson(req, 4096);
+    const email = cleanEmail(body.email);
+    if (!email) throw new ValidationError('email', 'Informe um e-mail válido.');
+    const name = cleanAdminName(body.name);
+    if (!name) throw new ValidationError('name', 'Informe o nome (2 a 80 caracteres).');
+    if (!ROLES[body.role]) throw new ValidationError('role', 'Escolha o nível de acesso.');
+    let token;
+    try { token = await createInvite({ email, name, role: body.role, createdBy: admin.id }); } catch (e) {
+      if (e.code === 'EXISTS') throw new ValidationError('email', e.message);
+      throw e;
+    }
+    await audit(admin.id, 'invite_created', 'invite', email, { role: body.role }); // o token nunca vai para o log
+    json(req, res, 201, { ok: true, token, hours: INVITE_HOURS, emailSent: false });
+  });
+
+  router.post('/api/admin/invites/:id/resend', async (req, res, { params }) => {
+    const admin = await requireAdmin(req, { principal: true });
+    const r = await resendInvite(idParam(params.id), admin.id);
+    if (!r) throw new HttpError(404, 'Convite não encontrado.', 'NOT_FOUND');
+    await audit(admin.id, 'invite_resent', 'invite', r.email);
+    json(req, res, 200, { ok: true, token: r.token, hours: INVITE_HOURS, emailSent: false });
+  });
+
+  router.delete('/api/admin/invites/:id', async (req, res, { params }) => {
+    const admin = await requireAdmin(req, { principal: true });
+    if (!(await revokeInvite(idParam(params.id)))) throw new HttpError(404, 'Convite não encontrado.', 'NOT_FOUND');
+    await audit(admin.id, 'invite_revoked', 'invite', params.id);
+    json(req, res, 200, { ok: true });
+  });
+
+  router.patch('/api/admin/admins/:id', async (req, res, { params }) => {
+    const admin = await requireAdmin(req, { principal: true });
+    const body = await readJson(req, 2048);
+    const role = body.role === undefined ? undefined : (ROLES[body.role] ? body.role : null);
+    if (role === null) throw new ValidationError('role', 'Nível de acesso inválido.');
+    const disabled = body.disabled === undefined ? undefined : body.disabled === true;
+    const r = await updateAdmin(idParam(params.id), { role, disabled }, admin.id);
+    if (!r.ok) throw new HttpError(r.status || 422, r.error, 'INVALID');
+    await audit(admin.id, disabled === true ? 'admin_disabled' : disabled === false ? 'admin_enabled' : 'admin_role_changed', 'admin', params.id, { role, email: r.email });
+    json(req, res, 200, { ok: true });
+  });
+
+  router.delete('/api/admin/admins/:id', async (req, res, { params }) => {
+    const admin = await requireAdmin(req, { principal: true });
+    const r = await removeAdmin(idParam(params.id), admin.id);
+    if (!r.ok) throw new HttpError(r.status || 422, r.error, 'INVALID');
+    await audit(admin.id, 'admin_removed', 'admin', params.id, { email: r.email });
+    json(req, res, 200, { ok: true });
+  });
+
+  // ----- Ativação do convite (sem sessão; o token viaja só no corpo da requisição, nunca na URL do servidor) -----
+  router.post('/api/admin/invites/check', async (req, res) => {
+    checkCsrf(req);
+    if (!rateLimit('invite:' + clientIp(req), 30, 15 * 60 * 1000).ok) throw new HttpError(429, 'Muitas tentativas. Aguarde alguns minutos.', 'RATE_LIMIT');
+    const body = await readJson(req, 2048);
+    const info = await inviteInfo(body.token);
+    if (!info) throw new HttpError(404, 'Este convite não é válido, já foi usado ou expirou. Peça um novo convite ao administrador principal.', 'INVITE_INVALID');
+    json(req, res, 200, { invite: info });
+  });
+
+  router.post('/api/admin/invites/accept', async (req, res) => {
+    checkCsrf(req);
+    if (!rateLimit('invite:' + clientIp(req), 30, 15 * 60 * 1000).ok) throw new HttpError(429, 'Muitas tentativas. Aguarde alguns minutos.', 'RATE_LIMIT');
+    const body = await readJson(req, 4096);
+    if (body.password !== body.confirm) throw new ValidationError('confirm', 'As senhas não conferem.');
+    const r = await acceptInvite({ token: body.token, email: body.email, name: body.name, password: body.password });
+    if (!r.ok) throw new HttpError(422, r.error, 'INVALID', r.field);
+    json(req, res, 201, { ok: true });
+  });
+
+  // ----- Integrações (somente administrador principal + senha exclusiva) -----
+  router.get('/api/admin/integrations/status', async (req, res) => {
+    const admin = await requireAdmin(req, { principal: true });
+    json(req, res, 200, await integrationStatus(admin));
+  });
+
+  router.post('/api/admin/integrations/setup', async (req, res) => {
+    const admin = await requireAdmin(req, { principal: true });
+    const body = await readJson(req, 2048);
+    if (body.password !== body.confirm) throw new ValidationError('confirm', 'As senhas não conferem.');
+    const r = await setupIntegrationPassword(admin.id, body.password);
+    if (!r.ok) throw new HttpError(422, r.error, 'INVALID', 'password');
+    await unlockSession(admin.sessionId);
+    await audit(admin.id, 'integrations_password_created', 'integrations', null);
+    json(req, res, 201, { ok: true, recoveryCode: r.recoveryCode });
+  });
+
+  router.post('/api/admin/integrations/unlock', async (req, res) => {
+    const admin = await requireAdmin(req, { principal: true });
+    if (!rateLimit('integrations:' + admin.id, 10, 15 * 60 * 1000).ok) throw new HttpError(429, 'Muitas tentativas. Aguarde 15 minutos.', 'RATE_LIMIT');
+    const body = await readJson(req, 2048);
+    const r = await checkIntegrationPassword(body.password);
+    if (!r.ok) {
+      await audit(admin.id, r.reason === 'locked' ? 'integrations_unlock_blocked' : 'integrations_unlock_failed', 'integrations', null, { ip: clientIp(req) });
+      if (r.reason === 'setup') throw new HttpError(423, 'Crie a senha de Integrações para continuar.', 'INTEGRATIONS_SETUP');
+      if (r.reason === 'locked') throw new HttpError(429, 'Muitas tentativas. A área de Integrações foi bloqueada por 15 minutos.', 'LOCKED');
+      throw new HttpError(401, 'Senha de Integrações incorreta.', 'INVALID_PASSWORD', 'password');
+    }
+    await unlockSession(admin.sessionId);
+    await audit(admin.id, 'integrations_unlocked', 'integrations', null);
+    json(req, res, 200, { ok: true });
+  });
+
+  router.post('/api/admin/integrations/lock', async (req, res) => {
+    const admin = await requireAdmin(req, { principal: true });
+    await lockSession(admin.sessionId);
+    json(req, res, 200, { ok: true });
+  });
+
+  router.get('/api/admin/integrations', async (req, res) => {
+    await requireIntegrations(req);
+    const settings = await getSettings({ fresh: true });
+    const { rows: metaLog } = await q(`SELECT m.event_name, m.status, left(m.response, 300) AS response, to_char(m.created_at AT TIME ZONE 'America/Manaus', 'DD/MM HH24:MI') AS at, a.protocol
+                                         FROM meta_events m LEFT JOIN appointments a ON a.id = m.appointment_id ORDER BY m.id DESC LIMIT 10`);
+    // Tokens nunca saem do servidor: o painel recebe só se estão configurados.
+    json(req, res, 200, { meta: settings.meta, env: await siteStatus(), metaLog });
+  });
+
+  router.post('/api/admin/integrations/password', async (req, res) => {
+    const admin = await requireIntegrations(req);
+    const body = await readJson(req, 2048);
+    if (body.next !== body.confirm) throw new ValidationError('confirm', 'As senhas não conferem.');
+    const r = await changeIntegrationPassword(body.current, body.next);
+    if (!r.ok) {
+      await audit(admin.id, 'integrations_password_change_failed', 'integrations', null);
+      throw new HttpError(422, r.error, 'INVALID', 'current');
+    }
+    await unlockSession(admin.sessionId); // as outras sessões foram bloqueadas; esta continua aberta
+    await audit(admin.id, 'integrations_password_changed', 'integrations', null);
+    json(req, res, 200, { ok: true });
+  });
+
+  router.post('/api/admin/integrations/revoke', async (req, res) => {
+    const admin = await requireIntegrations(req);
+    const n = await revokeIntegrationSessions();
+    await audit(admin.id, 'integrations_sessions_revoked', 'integrations', null, { sessions: n });
+    json(req, res, 200, { ok: true, sessions: n });
+  });
+
+  router.post('/api/admin/integrations/reset', async (req, res) => {
+    const admin = await requireAdmin(req, { principal: true });
+    if (!rateLimit('integrations-reset:' + admin.id, 5, 15 * 60 * 1000).ok) throw new HttpError(429, 'Muitas tentativas. Aguarde 15 minutos.', 'RATE_LIMIT');
+    const body = await readJson(req, 2048);
+    if (body.next !== body.confirm) throw new ValidationError('confirm', 'As senhas não conferem.');
+    const r = await resetIntegrationPassword({ adminId: admin.id, accountPassword: body.accountPassword, recoveryCode: body.recoveryCode, next: body.next });
+    if (!r.ok) {
+      await audit(admin.id, 'integrations_reset_failed', 'integrations', null, { ip: clientIp(req) });
+      throw new HttpError(422, r.error, 'INVALID');
+    }
+    await unlockSession(admin.sessionId);
+    await audit(admin.id, 'integrations_password_reset', 'integrations', null);
+    json(req, res, 200, { ok: true, recoveryCode: r.recoveryCode });
   });
 }

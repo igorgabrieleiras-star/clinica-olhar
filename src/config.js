@@ -66,8 +66,10 @@ export function assertConfig() {
   if ((config.adminGateUser && !config.adminGatePassword) || (!config.adminGateUser && config.adminGatePassword)) problems.push('Defina ADMIN_GATE_USER e ADMIN_GATE_PASSWORD juntos.');
   if (config.adminGatePassword && config.adminGatePassword.length < 16) problems.push('ADMIN_GATE_PASSWORD deve ter pelo menos 16 caracteres.');
   if (!!config.cfAccessTeamDomain !== !!config.cfAccessAud) problems.push('Defina ADMIN_CF_ACCESS_TEAM_DOMAIN e ADMIN_CF_ACCESS_AUD juntos.');
+  // O painel usa login individual por e-mail e senha (com bloqueio por tentativas, sessões HttpOnly/Secure e
+  // autorização no servidor). Camadas extras na frente do login são opcionais: Cloudflare Access ou lista de IPs.
   if (config.isProd && config.role === 'admin' && !config.adminAllowedIps.length && !config.adminGateUser && !config.cfAccessAud) {
-    problems.push('Painel em produção sem camada extra de acesso. Configure pelo menos uma: Cloudflare Access (ADMIN_CF_ACCESS_TEAM_DOMAIN + ADMIN_CF_ACCESS_AUD), ADMIN_ALLOWED_IPS ou ADMIN_GATE_USER + ADMIN_GATE_PASSWORD.');
+    console.log('[painel] acesso por login individual (e-mail e senha). Camada opcional disponível: Cloudflare Access (ADMIN_CF_ACCESS_TEAM_DOMAIN + ADMIN_CF_ACCESS_AUD) ou ADMIN_ALLOWED_IPS.');
   }
   if (!config.databaseUrl) problems.push('DATABASE_URL não definida.');
   if (config.sessionSecret.length < 32) problems.push('SESSION_SECRET deve ter pelo menos 32 caracteres.');

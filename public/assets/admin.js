@@ -37,9 +37,9 @@
     if (body !== undefined) { opts.headers['content-type'] = 'application/json'; opts.body = JSON.stringify(body); }
     return fetch(url, opts).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (d) {
-        if (r.status === 401 && url !== '/api/admin/login') { renderLogin(d.error); throw new Error(d.error || 'Sessão expirada'); }
+        if (r.status === 401 && d.code === 'UNAUTHENTICATED') { renderLogin(d.error); throw new Error(d.error || 'Sessão expirada'); }
         if (r.status === 403 && d.code === 'MUST_CHANGE_PASSWORD') { renderChangePassword(); throw new Error(d.error); }
-        if (!r.ok) { var e = new Error(d.error || 'Erro ' + r.status); e.data = d; throw e; }
+        if (!r.ok) { var e = new Error(d.error || 'Erro ' + r.status); e.data = d; e.status = r.status; e.code = d.code; throw e; }
         return d;
       });
     });
@@ -95,12 +95,16 @@
   }
 
   // ---------- Estrutura ----------
-  var PAGES = [
+  var ALL_PAGES = [
     ['painel', 'Painel'], ['agendamentos', 'Agendamentos'], ['agenda', 'Agenda'], ['espera', 'Lista de espera'],
-    ['configuracoes', 'Configurações'], ['integracoes', 'Integrações'],
+    ['configuracoes', 'Configurações'], ['administradores', 'Administradores', true], ['integracoes', 'Integrações', true],
   ];
+  var PAGES = ALL_PAGES;
+  function isPrincipal() { return !!(me && me.role === 'principal'); }
   function shell(active, inner) {
     app.className = '';
+    // Administradores comuns não veem Administradores nem Integrações (o servidor também nega o acesso).
+    PAGES = ALL_PAGES.filter(function (p) { return !p[2] || isPrincipal(); });
     var label = (PAGES.filter(function (p) { return p[0] === active; })[0] || PAGES[0])[1];
     app.innerHTML = '<div class="shell">' +
       // Barra superior do celular: logomarca + botão do menu
@@ -109,8 +113,8 @@
       '<div class="side-bg" id="side-bg" hidden></div>' +
       '<aside class="side" id="side"><div class="side-top"><div class="logo">' + LOGO_SIG + '</div><button type="button" class="menu-close" id="menu-close" aria-label="Fechar menu">×</button></div><nav class="nav">' +
       PAGES.map(function (p) { return '<a href="#/' + p[0] + '" class="' + (p[0] === active ? 'on' : '') + '">' + p[1] + '</a>'; }).join('') +
-      '</nav><div class="side-foot"><div class="who">' + esc(me.email) + '</div><button type="button" id="logout">Sair</button></div></aside><main class="main" id="main">' + inner + '</main></div>';
-    $('#logout').addEventListener('click', function () { api('POST', '/api/admin/logout').then(function () { renderLogin(); }); });
+      '</nav><div class="side-foot"><div class="who"><b>' + esc(me.name) + '</b><span>' + esc(me.email) + '</span><span class="role-tag">' + esc(me.roleLabel || '') + '</span></div><button type="button" id="logout">Sair</button></div></aside><main class="main" id="main">' + inner + '</main></div>';
+    $('#logout').addEventListener('click', function () { api('POST', '/api/admin/logout').then(function () { location.hash = '#/painel'; renderLogin(); }); });
     var side = $('#side'), bg = $('#side-bg'), openBtn = $('#menu-open');
     function setMenu(open) {
       side.classList.toggle('open', open); bg.hidden = !open; openBtn.setAttribute('aria-expanded', String(open));
@@ -129,11 +133,14 @@
   });
   function main() { return $('#main'); }
 
+  var pageTimers = [];
   function route() {
-    if (!me) return;
+    pageTimers.forEach(clearInterval); pageTimers = [];
     var parts = (location.hash.replace(/^#\/?/, '') || 'painel').split('/');
+    if (parts[0] === 'convite') return renderInvite(parts[1] || '');
+    if (!me) return renderLogin();
     var page = parts[0];
-    var fn = { painel: pageDashboard, agendamentos: pageAppointments, agenda: pageAgenda, espera: pageWaitlist, configuracoes: pageSettings, integracoes: pageIntegrations }[page] || pageDashboard;
+    var fn = { painel: pageDashboard, agendamentos: pageAppointments, agenda: pageAgenda, espera: pageWaitlist, configuracoes: pageSettings, administradores: pageAdmins, integracoes: pageIntegrations }[page] || pageDashboard;
     shell(page, '<div class="empty">Carregando…</div>');
     fn(parts.slice(1));
   }
@@ -150,7 +157,8 @@
       var max = Math.max.apply(null, d.series.map(function (s) { return s.n; }).concat([1]));
       var stat = function (label, value, sub) { return '<div class="stat"><span>' + label + '</span><b>' + value + '</b>' + (sub ? '<small>' + sub + '</small>' : '') + '</div>'; };
       var total30 = d.series.reduce(function (n, s) { return n + s.n; }, 0);
-      main().innerHTML = '<div class="page-head"><div><h1>Painel</h1><p>Hoje é ' + esc(d.labels.today) + '.</p></div>' + publicLink('/', 'Ver site') + '</div>' +
+      main().innerHTML = '<div class="page-head greet-head"><div class="greet"><p class="greet-date" id="greet-date"></p><h1 id="greet"></h1><p>Confira os agendamentos e acompanhe os atendimentos da Clínica Olhar.</p>' +
+        (me.name === 'Administrador' ? '<p class="hint"><a href="#/configuracoes">Informe seu nome</a> para personalizar a saudação.</p>' : '') + '</div>' + publicLink('/', 'Ver site') + '</div>' +
         (setup.length ? '<div class="alert"><div><b>Antes de divulgar</b><ul>' + setup.map(function (s) { return '<li>' + s + '</li>'; }).join('') + '</ul></div></div>' : '') +
         '<div class="stats">' +
         stat('TOTAL DE AGENDAMENTOS', c.total, c.cancelled + ' cancelados') +
@@ -167,7 +175,21 @@
           var row = d.byStatus.filter(function (x) { return x.status === k; })[0];
           return '<li><span class="pill s-' + k + '">' + STATUS[k] + '</span><b>' + (row ? row.n : 0) + '</b></li>';
         }).join('') + '</ul><h3>Campanhas (30 dias)</h3><ul class="list-kv">' + (d.bySource.length ? d.bySource.map(function (s) { return '<li><span>' + esc(s.campaign) + '</span><b>' + s.n + '</b></li>'; }).join('') : '<li>Nenhum agendamento ainda.</li>') + '</ul></section></div>';
+      updateGreeting();
+      pageTimers.push(setInterval(updateGreeting, 30000)); // troca sozinha de "bom dia" para "boa tarde"/"boa noite"
     }).catch(fail);
+  }
+
+  // Saudação pelo horário de Manaus: 05:00–11:59 bom dia · 12:00–17:59 boa tarde · 18:00–04:59 boa noite.
+  function manausHour(d) { return Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Manaus', hour: 'numeric', hourCycle: 'h23' }).format(d)) % 24; }
+  function greetingFor(hour) { return hour >= 5 && hour < 12 ? 'Bom dia' : hour >= 12 && hour < 18 ? 'Boa tarde' : 'Boa noite'; }
+  function updateGreeting() {
+    var g = $('#greet'); if (!g || !me) return;
+    var d = new Date();
+    var first = String(me.name || '').trim().split(/\s+/)[0] || '';
+    g.textContent = greetingFor(manausHour(d)) + (first && me.name !== 'Administrador' ? ', ' + first : '') + '!';
+    var date = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Manaus', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(d);
+    $('#greet-date').textContent = date.charAt(0).toUpperCase() + date.slice(1);
   }
 
   // ---------- Agendamentos ----------
@@ -461,11 +483,13 @@
 
   // ---------- Configurações ----------
   function pageSettings() {
-    Promise.all([api('GET', '/api/admin/settings'), api('GET', '/api/admin/faq'), api('GET', '/api/admin/legal'), api('GET', '/api/admin/audit')]).then(function (all) {
-      var s = all[0].settings, faq = all[1].items, legal = all[2], auditLog = all[3].items;
+    Promise.all([api('GET', '/api/admin/settings'), api('GET', '/api/admin/faq'), api('GET', '/api/admin/legal'), isPrincipal() ? api('GET', '/api/admin/audit') : Promise.resolve(null)]).then(function (all) {
+      var s = all[0].settings, faq = all[1].items, legal = all[2], auditLog = all[3] ? all[3].items : null;
       var cb = function (name, checked, label) { return '<label class="cbx"><input type="checkbox" name="' + name + '"' + (checked ? ' checked' : '') + '><span>' + label + '</span></label>'; };
       var inp = function (name, label, value, attrs) { return '<label class="f"><span>' + label + '</span><input ' + (attrs || 'type="text"') + ' name="' + name + '" value="' + esc(value == null ? '' : value) + '"></label>'; };
       main().innerHTML = '<div class="page-head"><div><h1>Configurações</h1><p>Tudo o que aparece no site pode ser ajustado aqui.</p></div></div>' +
+        '<form class="panel" id="profile"><h2>Meu perfil</h2><p class="hint">Seu nome aparece na saudação do painel.</p><div class="form-grid">' + inp('name', 'Seu nome', me.name === 'Administrador' ? '' : me.name, 'type="text" maxlength="80" autocomplete="name" placeholder="Ex.: Igor"') +
+        '<div style="align-self:end;margin-bottom:12px"><button class="btn primary">Salvar nome</button></div></div></form>' +
         '<form class="panel" data-sec="booking"><h2>Agendamento</h2>' +
         cb('enabled', s.booking.enabled, '<b>Agendamentos online abertos</b> — quando desligado, o site não aceita novos agendamentos.') +
         cb('waitlist_enabled', s.booking.waitlist_enabled, 'Oferecer lista de espera quando não houver vagas') +
@@ -484,8 +508,9 @@
         (all[0].logo ? '<img src="/media/logo?v=' + all[0].logo.version + '" alt="Logo atual" style="height:44px;border:1px solid var(--line);border-radius:8px;padding:4px;background:#fff">' : '<span class="hint">Usando a marca padrão.</span>') +
         '<input type="file" id="logo-file" accept="image/png,image/jpeg,image/webp" style="width:auto">' + (all[0].logo ? '<button class="btn danger small" id="logo-del">Remover logo</button>' : '') + '</div></section>' +
 
-        '<form class="panel" data-sec="social_proof"><h2>Avisos de agendamentos recentes</h2><p class="hint">Mostra no site avisos como “Mariana realizou um agendamento”. Usa somente agendamentos reais de pacientes que autorizaram exibir o primeiro nome. Sem autorizações, nada é exibido.</p>' +
-        cb('enabled', s.social_proof.enabled, 'Exibir avisos') + inp('max_age_hours', 'Mostrar agendamentos das últimas (horas)', s.social_proof.max_age_hours, 'type="number" min="1" max="168"') + '<button class="btn primary">Salvar</button></form>' +
+        '<form class="panel" data-sec="social_proof"><h2>Pop-ups do site</h2><p class="hint">Pequenos avisos no canto da tela, um por vez, que nunca cobrem o formulário. Os avisos de agendamento usam somente agendamentos reais de pacientes que autorizaram exibir o primeiro nome.</p>' +
+        cb('institutional', s.social_proof.institutional !== false, '<b>Avisos da clínica</b> — ex.: “Exame de vista 100% gratuito”, “Horários disponíveis para hoje e amanhã” (sem citar pacientes)') +
+        cb('enabled', s.social_proof.enabled, '<b>Avisos de agendamentos reais</b> — ex.: “Mariana agendou seu exame para sábado, às 10h”') + inp('max_age_hours', 'Mostrar agendamentos das últimas (horas)', s.social_proof.max_age_hours, 'type="number" min="1" max="168"') + '<button class="btn primary">Salvar</button></form>' +
 
         '<form class="panel" data-sec="content"><h2>Seção “Por que cuidar da visão?”</h2>' + inp('vision_title', 'Título', s.content.vision_title) +
         '<label class="f"><span>Parágrafos (um por linha em branco)</span><textarea name="vision_paragraphs" rows="8">' + esc(s.content.vision_paragraphs.join('\n\n')) + '</textarea></label><p class="hint">Use linguagem informativa. Não prometa diagnóstico, cura ou resultados.</p><button class="btn primary" style="margin-top:10px">Salvar</button></form>' +
@@ -499,7 +524,11 @@
 
         '<form class="panel" id="pwf"><h2>Segurança — trocar senha</h2><div class="form-grid">' + inp('current', 'Senha atual', '', 'type="password" autocomplete="current-password"') + inp('next', 'Nova senha (12+ caracteres)', '', 'type="password" autocomplete="new-password"') + '</div><button class="btn primary">Trocar senha</button></form>' +
 
-        '<section class="panel"><h2>Registro de atividades</h2><ul class="list-kv">' + (auditLog.length ? auditLog.slice(0, 40).map(function (a) { return '<li><span>' + esc(a.at) + ' · ' + esc(a.email || '—') + '</span><span>' + esc(a.action) + (a.entity_id ? ' #' + esc(a.entity_id) : '') + '</span></li>'; }).join('') : '<li>Sem registros.</li>') + '</ul></section>';
+        (auditLog ? '<section class="panel"><h2>Registro de atividades</h2><ul class="list-kv">' + (auditLog.length ? auditLog.slice(0, 60).map(function (a) { return '<li><span>' + esc(a.at) + ' · ' + esc(a.email || '—') + '</span><span>' + esc(a.action) + (a.entity_id ? ' #' + esc(a.entity_id) : '') + '</span></li>'; }).join('') : '<li>Sem registros.</li>') + '</ul></section>' : '');
+      $('#profile').addEventListener('submit', function (e) {
+        e.preventDefault();
+        api('PATCH', '/api/admin/me', { name: e.target.name.value }).then(function (d) { me = d.admin; toast('Nome salvo.'); route(); }).catch(fail);
+      });
 
       $('[name=minor_rule]').value = s.booking.minor_rule;
       $$('form[data-sec]').forEach(function (f) {
@@ -511,7 +540,6 @@
             body[el.name] = el.type === 'checkbox' ? el.checked : el.value;
           });
           if (sec === 'content') body.vision_paragraphs = body.vision_paragraphs.split(/\n\s*\n/).map(function (p) { return p.trim(); }).filter(Boolean);
-          if (sec === 'meta') body.require_consent = !!body.require_consent;
           api('PUT', '/api/admin/settings/' + sec, body).then(function () { toast('Configurações salvas.'); }).catch(fail);
         });
       });
@@ -547,37 +575,247 @@
       '<div class="btn-row"><label class="cbx" style="margin:0"><input type="checkbox" name="on"' + (f.active ? ' checked' : '') + '> Exibir no site</label><button type="button" class="btn small danger" data-faq-del>Remover</button></div></div>';
   }
 
-  // ---------- Integrações ----------
-  function pageIntegrations() {
-    api('GET', '/api/admin/settings').then(function (d) {
-      var m = d.settings.meta, env = d.env;
-      main().innerHTML = '<div class="page-head"><div><h1>Integrações</h1><p>META ADS — Pixel e API de Conversões.</p></div></div>' +
-        '<form class="panel" data-sec="meta"><h2>Meta Pixel</h2>' +
-        '<label class="cbx"><input type="checkbox" name="pixel_enabled"' + (m.pixel_enabled ? ' checked' : '') + '><span><b>Ativar Meta Pixel</b></span></label>' +
-        '<label class="f" style="max-width:360px"><span>ID do Meta Pixel</span><input type="text" name="pixel_id" inputmode="numeric" value="' + esc(m.pixel_id) + '" placeholder="Somente números"></label>' +
-        '<label class="cbx"><input type="checkbox" name="require_consent"' + (m.require_consent ? ' checked' : '') + '><span>Pedir consentimento de cookies antes de ativar o Pixel (recomendado pela LGPD)</span></label>' +
-        '<label class="cbx"><input type="checkbox" name="schedule_event"' + (m.schedule_event ? ' checked' : '') + '><span>Enviar também o evento <b>Schedule</b> no agendamento confirmado</span></label>' +
-        '<h3>API de Conversões</h3><label class="cbx"><input type="checkbox" name="capi_enabled"' + (m.capi_enabled ? ' checked' : '') + '><span>Enviar o evento <b>Lead</b> também pelo servidor</span></label>' +
-        '<p class="hint">Token de acesso no ' + (env.separate ? 'serviço do site público' : 'servidor') + ': ' + (env.capiTokenConfigured ? '<b style="color:var(--green)">configurado</b>' : '<b style="color:var(--red)">não configurado</b> — defina META_CAPI_ACCESS_TOKEN nas variáveis do ' + (env.separate ? 'serviço do site público' : 'servidor') + '.') + (env.testEventCode ? ' · Código de teste ativo.' : '') +
-        (env.separate ? (env.seenAt ? ' · Site público iniciado em ' + esc(env.seenAt) + '.' : ' · O site público ainda não se conectou ao banco.') : '') + '</p>' +
-        '<button class="btn primary" style="margin-top:12px">Salvar</button></form>' +
-        '<section class="panel"><h2>Eventos implementados</h2><ul class="list-kv">' +
-        '<li><span><b>PageView</b></span><span>carregamento da página</span></li><li><span><b>ViewContent</b></span><span>visualização da oferta</span></li>' +
-        '<li><span><b>StartRegistration</b> (personalizado)</span><span>primeira interação com o formulário</span></li>' +
-        '<li><span><b>Lead</b> — conversão principal</span><span>somente após o agendamento ser gravado no banco; mesmo event_id no Pixel e na API de Conversões (deduplicação); uma vez por agendamento</span></li>' +
-        '<li><span><b>Contact</b></span><span>clique no botão do WhatsApp</span></li><li><span><b>Schedule</b> (opcional)</span><span>agendamento confirmado</span></li></ul>' +
-        '<p class="hint" style="margin-top:10px">Enviados à Meta: WhatsApp e primeiro nome em hash SHA-256, IP, navegador e identificadores de clique. Nunca são enviados idade, informações clínicas ou de saúde.</p></section>' +
-        '<section class="panel"><h2>Últimos envios pela API de Conversões</h2>' + (d.metaLog.length ? '<ul class="list-kv">' + d.metaLog.map(function (e) { return '<li><span>' + esc(e.at) + ' · ' + esc(e.event_name) + ' · ' + esc(e.protocol || '') + '</span><span class="pill ' + (e.status === 'sent' ? 's-COMPARECEU' : 's-NAO_COMPARECEU') + '">' + esc(e.status) + '</span></li>'; }).join('') + '</ul>' : '<p class="hint">Nenhum envio ainda.</p>') + '</section>';
-      $('form[data-sec=meta]').addEventListener('submit', function (e) {
-        e.preventDefault(); var f = e.target;
-        api('PUT', '/api/admin/settings/meta', { pixel_enabled: f.pixel_enabled.checked, pixel_id: f.pixel_id.value, require_consent: f.require_consent.checked, schedule_event: f.schedule_event.checked, capi_enabled: f.capi_enabled.checked })
-          .then(function () { toast('Integração salva.'); }).catch(fail);
-      });
-    }).catch(fail);
+  // ---------- Janela (modal) ----------
+  function modal(title, bodyHtml, opts) {
+    closeModal();
+    opts = opts || {};
+    var bg = document.createElement('div'); bg.className = 'modal-bg'; bg.id = 'modal-bg';
+    var m = document.createElement('div'); m.className = 'modal' + (opts.cls ? ' ' + opts.cls : ''); m.id = 'modal';
+    m.setAttribute('role', 'dialog'); m.setAttribute('aria-modal', 'true'); m.setAttribute('aria-labelledby', 'modal-title');
+    m.innerHTML = '<div class="modal-head"><h2 id="modal-title">' + title + '</h2><button type="button" class="modal-x" data-modal-x aria-label="Fechar">×</button></div><div class="modal-body">' + bodyHtml + '</div>';
+    bg.addEventListener('click', closeModal);
+    document.body.appendChild(bg); document.body.appendChild(m);
+    document.body.classList.add('modal-open');
+    $('[data-modal-x]', m).addEventListener('click', closeModal);
+    var first = $('input, select, button:not([data-modal-x])', m); if (first) first.focus();
+    return m;
+  }
+  function closeModal() { $$('#modal, #modal-bg').forEach(function (x) { x.remove(); }); document.body.classList.remove('modal-open'); }
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && $('#modal')) closeModal(); });
+
+  // Campo de senha com botão mostrar/ocultar
+  function pwField(name, label, auto, extra) {
+    return '<label class="f"><span>' + label + '</span><span class="pw-wrap"><input type="password" name="' + name + '" autocomplete="' + (auto || 'off') + '"' + (extra || '') + '>' +
+      '<button type="button" class="pw-eye" data-eye aria-label="Mostrar senha" aria-pressed="false">Mostrar</button></span></label>';
+  }
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-eye]'); if (!b) return;
+    var i = b.parentNode.querySelector('input'); var show = i.type === 'password';
+    i.type = show ? 'text' : 'password'; b.textContent = show ? 'Ocultar' : 'Mostrar';
+    b.setAttribute('aria-pressed', String(show)); b.setAttribute('aria-label', show ? 'Ocultar senha' : 'Mostrar senha');
+  });
+  function copyText(text, btn) {
+    var done = function () { if (btn) { btn.textContent = 'Copiado!'; setTimeout(function () { btn.textContent = 'Copiar'; }, 1800); } };
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, function () { manual(); });
+    else manual();
+    function manual() { var i = btn && btn.parentNode.querySelector('input'); if (i) { i.select(); try { document.execCommand('copy'); done(); } catch (x) { /* o usuário copia manualmente */ } } }
   }
 
+  // ---------- Administradores (somente o administrador principal) ----------
+  var ST_ADMIN = { ativo: ['Ativo', 's-COMPARECEU'], desativado: ['Desativado', 's-CANCELADO'], convite_pendente: ['Convite pendente', 's-CONTATADO'], convite_expirado: ['Convite expirado', 's-NAO_COMPARECEU'] };
+  function pageAdmins() {
+    if (!isPrincipal()) { main().innerHTML = deniedHtml(); return; }
+    api('GET', '/api/admin/admins').then(function (d) {
+      var roleSel = function (id, cur) { return '<select data-role="' + id + '" aria-label="Permissão">' + Object.keys(d.roles).map(function (k) { return '<option value="' + k + '"' + (k === cur ? ' selected' : '') + '>' + esc(d.roles[k]) + '</option>'; }).join('') + '</select>'; };
+      var rows = d.admins.map(function (a) {
+        var self = a.id === d.me;
+        return '<tr><td data-l="Nome"><b>' + esc(a.name) + '</b>' + (self ? '<span class="sub">Você</span>' : '') + '</td><td data-l="E-mail">' + esc(a.email) + '</td>' +
+          '<td data-l="Permissão">' + (self ? esc(d.roles[a.role]) : roleSel(a.id, a.role)) + '</td>' +
+          '<td data-l="Status"><span class="pill ' + ST_ADMIN[a.status][1] + '">' + ST_ADMIN[a.status][0] + '</span></td>' +
+          '<td data-l="Último acesso">' + esc(a.last_login || '—') + '</td>' +
+          '<td data-l="Ações">' + (self ? '' : '<div class="btn-row">' + (a.disabled ? '<button class="btn small" data-enable="' + a.id + '">Reativar acesso</button>' : '<button class="btn small" data-disable="' + a.id + '">Desativar acesso</button>') +
+            '<button class="btn small danger" data-remove="' + a.id + '" data-name="' + esc(a.name) + '">Remover</button></div>') + '</td></tr>';
+      }).concat(d.invites.map(function (i) {
+        return '<tr class="is-invite"><td data-l="Nome"><b>' + esc(i.name) + '</b><span class="sub">Convite ' + (i.expired ? 'expirou' : 'válido até') + ' ' + esc(i.expires) + '</span></td><td data-l="E-mail">' + esc(i.email) + '</td>' +
+          '<td data-l="Permissão">' + esc(d.roles[i.role]) + '</td><td data-l="Status"><span class="pill ' + ST_ADMIN[i.status][1] + '">' + ST_ADMIN[i.status][0] + '</span></td><td data-l="Último acesso">—</td>' +
+          '<td data-l="Ações"><div class="btn-row"><button class="btn small" data-resend="' + i.id + '">Reenviar convite</button><button class="btn small danger" data-revoke="' + i.id + '">Revogar convite</button></div></td></tr>';
+      }));
+      main().innerHTML = '<div class="page-head"><div><h1>Gerenciar administradores</h1><p>Somente você, como administrador principal, pode convidar, alterar ou remover acessos.</p></div><button class="btn primary" id="add-admin">+ ADICIONAR ADMINISTRADOR</button></div>' +
+        '<div class="table-wrap"><table class="t t-admins"><thead><tr><th>Nome</th><th>E-mail</th><th>Permissão</th><th>Status</th><th>Último acesso</th><th></th></tr></thead><tbody>' + rows.join('') + '</tbody></table></div>' +
+        '<section class="panel"><h2>Níveis de acesso</h2><ul class="list-kv"><li><span><b>Administrador principal</b></span><span>acesso completo: administradores, Integrações e configurações sensíveis</span></li>' +
+        '<li><span><b>Administrador</b></span><span>agendamentos, pacientes, agenda, lista de espera e configurações do site — sem Integrações e sem gerenciar administradores</span></li></ul></section>';
+      $('#add-admin').addEventListener('click', function () { inviteForm(d); });
+      $$('[data-role]').forEach(function (sel) {
+        sel.addEventListener('change', function () {
+          api('PATCH', '/api/admin/admins/' + sel.getAttribute('data-role'), { role: sel.value }).then(function () { toast('Permissão alterada.'); pageAdmins(); }).catch(function (x) { fail(x); pageAdmins(); });
+        });
+      });
+      var act = function (attr, fn) { $$('[' + attr + ']').forEach(function (b) { b.addEventListener('click', function () { fn(b.getAttribute(attr), b); }); }); };
+      act('data-disable', function (id) { if (!confirm('Desativar o acesso deste administrador? As sessões abertas serão encerradas.')) return; api('PATCH', '/api/admin/admins/' + id, { disabled: true }).then(function () { toast('Acesso desativado.'); pageAdmins(); }).catch(fail); });
+      act('data-enable', function (id) { api('PATCH', '/api/admin/admins/' + id, { disabled: false }).then(function () { toast('Acesso reativado.'); pageAdmins(); }).catch(fail); });
+      act('data-remove', function (id, b) { if (!confirm('Remover ' + b.getAttribute('data-name') + ' dos administradores? Esta ação não pode ser desfeita.')) return; api('DELETE', '/api/admin/admins/' + id).then(function () { toast('Administrador removido.'); pageAdmins(); }).catch(fail); });
+      act('data-revoke', function (id) { if (!confirm('Revogar este convite? O link deixará de funcionar.')) return; api('DELETE', '/api/admin/invites/' + id).then(function () { toast('Convite revogado.'); pageAdmins(); }).catch(fail); });
+      act('data-resend', function (id) { api('POST', '/api/admin/invites/' + id + '/resend').then(function (r) { showInviteLink(r, d); pageAdmins(); }).catch(fail); });
+    }).catch(failPage);
+  }
+  function inviteForm(d) {
+    var m = modal('Adicionar administrador', '<form id="inv-form" novalidate>' +
+      '<label class="f"><span>Nome do administrador</span><input type="text" name="name" maxlength="80" autocomplete="off" required></label>' +
+      '<label class="f"><span>E-mail</span><input type="email" name="email" maxlength="160" autocomplete="off" required></label>' +
+      '<label class="f"><span>Nível de acesso</span><select name="role"><option value="admin">Administrador</option><option value="principal">Administrador principal</option></select></label>' +
+      '<p class="hint">Será gerado um link de ativação exclusivo, de uso único e válido por ' + d.inviteHours + ' horas. A pessoa cria a própria senha — nenhuma senha é enviada.</p>' +
+      '<p class="err" id="inv-err" hidden></p><div class="btn-row modal-actions"><button type="button" class="btn" data-cancel>Cancelar</button><button class="btn primary">Gerar convite</button></div></form>');
+    $('[data-cancel]', m).addEventListener('click', closeModal);
+    $('#inv-form', m).addEventListener('submit', function (e) {
+      e.preventDefault(); var f = e.target, err = $('#inv-err', m);
+      api('POST', '/api/admin/invites', { name: f.name.value, email: f.email.value, role: f.role.value })
+        .then(function (r) { showInviteLink(r, d); pageAdmins(); })
+        .catch(function (x) { err.textContent = x.message; err.hidden = false; });
+    });
+  }
+  function showInviteLink(r, d) {
+    var link = location.origin + location.pathname + '#/convite/' + r.token;
+    var m = modal('Convite criado', '<p>Envie este link para a pessoa por um canal seguro (ex.: WhatsApp direto). Ele é de <b>uso único</b> e vale por <b>' + r.hours + ' horas</b>.</p>' +
+      '<div class="copy-row"><input type="text" readonly id="inv-link" value="' + esc(link) + '" aria-label="Link do convite"><button type="button" class="btn primary" id="inv-copy">Copiar</button></div>' +
+      '<p class="hint">' + (r.emailSent ? 'O convite também foi enviado por e-mail.' : 'O envio automático por e-mail não está configurado — por isso o link aparece aqui. Ele não será exibido novamente; se precisar, use “Reenviar convite” para gerar outro.') + '</p>' +
+      '<div class="btn-row modal-actions"><button type="button" class="btn" data-ok>Concluir</button></div>');
+    $('#inv-copy', m).addEventListener('click', function (e) { copyText(link, e.target); });
+    $('[data-ok]', m).addEventListener('click', closeModal);
+  }
+  function deniedHtml() { return '<div class="panel denied"><h2>Acesso negado</h2><p class="hint">Esta área é exclusiva do administrador principal.</p></div>'; }
+  function failPage(x) { if (x && x.status === 403 && x.code === 'FORBIDDEN') { main().innerHTML = deniedHtml(); return; } fail(x); }
+
+  // ---------- Ativação do convite (sem login) ----------
+  function renderInvite(token) {
+    app.className = '';
+    var wrap = function (inner) { app.innerHTML = '<div class="auth"><div class="auth-brand">' + LOGO_FULL + '</div>' + inner + '</div>'; };
+    wrap('<div class="auth-card"><p>Verificando convite…</p></div>');
+    api('POST', '/api/admin/invites/check', { token: token }).then(function (d) {
+      var inv = d.invite;
+      wrap('<form class="auth-card" id="accept" novalidate><h1>Ative seu acesso</h1><p>Você foi convidado como <b>' + esc(inv.roleLabel) + '</b> do painel da Clínica Olhar.</p>' +
+        '<label class="f"><span>Confirme seu e-mail</span><input type="email" name="email" autocomplete="username" placeholder="' + esc(inv.email.replace(/^(.).*(@.*)$/, '$1•••$2')) + '" required></label>' +
+        '<label class="f"><span>Seu nome</span><input type="text" name="name" maxlength="80" autocomplete="name" value="' + esc(inv.name) + '"></label>' +
+        pwField('password', 'Crie sua senha (12+ caracteres, letras e números)', 'new-password') + pwField('confirm', 'Confirme a senha', 'new-password') +
+        '<p class="err" id="acc-err" hidden></p><button class="btn primary btn-block">Ativar minha conta</button></form>');
+      $('#accept').addEventListener('submit', function (e) {
+        e.preventDefault(); var f = e.target, err = $('#acc-err');
+        if (f.password.value !== f.confirm.value) { err.textContent = 'As senhas não conferem.'; err.hidden = false; return; }
+        f.querySelector('button.primary').disabled = true;
+        api('POST', '/api/admin/invites/accept', { token: token, email: f.email.value, name: f.name.value, password: f.password.value, confirm: f.confirm.value })
+          .then(function () {
+            history.replaceState(null, '', location.pathname + '#/painel'); // o link de uso único sai da barra de endereço
+            renderLogin(); toast('Conta ativada. Entre com seu e-mail e a senha que você criou.');
+          })
+          .catch(function (x) { err.textContent = x.message; err.hidden = false; f.querySelector('button.primary').disabled = false; });
+      });
+    }).catch(function (x) {
+      wrap('<div class="auth-card"><h1>Convite indisponível</h1><p>' + esc(x.message) + '</p><a class="btn primary btn-block" href="#/painel">Ir para o login</a></div>');
+    });
+  }
+
+  // ---------- Integrações (somente administrador principal + senha exclusiva) ----------
+  var integrIdle = null;
+  function armIntegrationsIdle(minutes) {
+    clearTimeout(integrIdle);
+    // Espelha o prazo do servidor: após 10 min sem uso, a tela volta a ficar bloqueada.
+    integrIdle = setTimeout(function () { if (/^#\/integracoes/.test(location.hash)) { toast('Integrações bloqueadas por inatividade.'); route(); } }, (minutes || 10) * 60 * 1000);
+  }
+  function pageIntegrations() {
+    if (!isPrincipal()) { main().innerHTML = deniedHtml(); return; }
+    api('GET', '/api/admin/integrations').then(function (d) { armIntegrationsIdle(10); renderIntegrations(d); }).catch(function (x) {
+      if (x.status === 423 && x.code === 'INTEGRATIONS_SETUP') return renderIntegrationsSetup();
+      if (x.status === 423) return renderUnlock();
+      failPage(x);
+    });
+  }
+  var LOCK_ICO = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="15.5" r="1.4" fill="currentColor"/></svg>';
+  function lockCard(inner) { main().innerHTML = '<div class="lock-wrap"><div class="lock-card"><span class="lock-ico">' + LOCK_ICO + '</span>' + inner + '</div></div>'; }
+  function renderUnlock() {
+    lockCard('<p class="lock-kicker">ÁREA PROTEGIDA</p><h1>Integrações</h1><p class="hint">Por segurança, confirme sua senha de Integrações para continuar.</p>' +
+      '<form id="unlock" novalidate>' + pwField('password', 'Senha de Integrações', 'off', ' required') +
+      '<p class="err" id="un-err" hidden></p><button class="btn primary btn-block">DESBLOQUEAR INTEGRAÇÕES</button></form>' +
+      '<button type="button" class="linkbtn" id="forgot">Esqueci a senha de Integrações</button>');
+    var f = $('#unlock'); f.password.focus();
+    f.addEventListener('submit', function (e) {
+      e.preventDefault(); var err = $('#un-err'); var btn = f.querySelector('button.primary'); btn.disabled = true;
+      api('POST', '/api/admin/integrations/unlock', { password: f.password.value }).then(function () { pageIntegrations(); })
+        .catch(function (x) { err.textContent = x.message; err.hidden = false; btn.disabled = false; f.password.value = ''; f.password.focus(); });
+    });
+    $('#forgot').addEventListener('click', renderReset);
+  }
+  function showRecoveryCode(code, then) {
+    lockCard('<p class="lock-kicker">CÓDIGO DE RECUPERAÇÃO</p><h1>Guarde este código</h1><p class="hint">Ele é exibido <b>uma única vez</b> e será pedido, junto com a senha da sua conta, se você esquecer a senha de Integrações. Anote em local seguro (fora deste computador).</p>' +
+      '<div class="copy-row"><input type="text" readonly id="rc" value="' + esc(code) + '" aria-label="Código de recuperação" class="mono"><button type="button" class="btn primary" id="rc-copy">Copiar</button></div>' +
+      '<label class="cbx"><input type="checkbox" id="rc-ok"><span>Guardei o código em local seguro</span></label><button class="btn primary btn-block" id="rc-go" disabled>Continuar</button>');
+    $('#rc-copy').addEventListener('click', function (e) { copyText(code, e.target); });
+    $('#rc-ok').addEventListener('change', function (e) { $('#rc-go').disabled = !e.target.checked; });
+    $('#rc-go').addEventListener('click', then);
+  }
+  function renderIntegrationsSetup() {
+    lockCard('<p class="lock-kicker">SEGURANÇA DAS INTEGRAÇÕES</p><h1>Crie a senha de Integrações</h1><p class="hint">Primeiro acesso: defina uma senha exclusiva para proteger Meta Pixel, API de Conversões e tokens. Use pelo menos 12 caracteres, com letras e números — e uma senha diferente da sua senha de login.</p>' +
+      '<form id="isetup" novalidate>' + pwField('password', 'Nova senha de Integrações', 'new-password') + pwField('confirm', 'Confirme a nova senha', 'new-password') +
+      '<p class="err" id="is-err" hidden></p><button class="btn primary btn-block">Criar senha de proteção</button></form>');
+    $('#isetup').addEventListener('submit', function (e) {
+      e.preventDefault(); var f = e.target, err = $('#is-err');
+      if (f.password.value !== f.confirm.value) { err.textContent = 'As senhas não conferem.'; err.hidden = false; return; }
+      api('POST', '/api/admin/integrations/setup', { password: f.password.value, confirm: f.confirm.value })
+        .then(function (r) { showRecoveryCode(r.recoveryCode, pageIntegrations); })
+        .catch(function (x) { err.textContent = x.message; err.hidden = false; });
+    });
+  }
+  function renderReset() {
+    lockCard('<p class="lock-kicker">RECUPERAR ACESSO</p><h1>Redefinir a senha de Integrações</h1><p class="hint">Confirme a senha da sua conta e o código de recuperação recebido ao criar a senha de Integrações.</p>' +
+      '<form id="ireset" novalidate>' + pwField('accountPassword', 'Senha da sua conta (login)', 'current-password') +
+      '<label class="f"><span>Código de recuperação</span><input type="text" name="recoveryCode" autocomplete="off" autocapitalize="characters" placeholder="XXXXX-XXXXX-XXXXX-XXXXX" class="mono"></label>' +
+      pwField('next', 'Nova senha de Integrações', 'new-password') + pwField('confirm', 'Confirme a nova senha', 'new-password') +
+      '<p class="err" id="ir-err" hidden></p><button class="btn primary btn-block">Redefinir senha</button></form>' +
+      '<p class="hint small-print">Perdeu também o código? Quem administra o servidor pode liberar uma nova configuração pelo terminal do Railway (<span class="mono">npm run integrations:reset -- --confirmar</span>).</p>' +
+      '<button type="button" class="linkbtn" id="back-unlock">Voltar</button>');
+    $('#back-unlock').addEventListener('click', renderUnlock);
+    $('#ireset').addEventListener('submit', function (e) {
+      e.preventDefault(); var f = e.target, err = $('#ir-err');
+      if (f.next.value !== f.confirm.value) { err.textContent = 'As senhas não conferem.'; err.hidden = false; return; }
+      api('POST', '/api/admin/integrations/reset', { accountPassword: f.accountPassword.value, recoveryCode: f.recoveryCode.value, next: f.next.value, confirm: f.confirm.value })
+        .then(function (r) { toast('Senha de Integrações redefinida.'); showRecoveryCode(r.recoveryCode, pageIntegrations); })
+        .catch(function (x) { err.textContent = x.message; err.hidden = false; });
+    });
+  }
+  function renderIntegrations(d) {
+    var m = d.meta, env = d.env;
+    main().innerHTML = '<div class="page-head"><div><h1>Integrações</h1><p>META ADS — Pixel e API de Conversões. <span class="unlocked-tag">' + LOCK_ICO + ' Desbloqueado · bloqueia após 10 min sem uso</span></p></div><button class="btn" id="relock">Bloquear agora</button></div>' +
+      '<form class="panel" data-sec="meta"><h2>Meta Pixel</h2>' +
+      '<label class="cbx"><input type="checkbox" name="pixel_enabled"' + (m.pixel_enabled ? ' checked' : '') + '><span><b>Ativar Meta Pixel</b></span></label>' +
+      '<label class="f" style="max-width:360px"><span>ID do Meta Pixel</span><input type="text" name="pixel_id" inputmode="numeric" value="' + esc(m.pixel_id) + '" placeholder="Somente números"></label>' +
+      '<label class="cbx"><input type="checkbox" name="require_consent"' + (m.require_consent ? ' checked' : '') + '><span>Pedir consentimento de cookies antes de ativar o Pixel (recomendado pela LGPD)</span></label>' +
+      '<label class="cbx"><input type="checkbox" name="schedule_event"' + (m.schedule_event ? ' checked' : '') + '><span>Enviar também o evento <b>Schedule</b> no agendamento confirmado</span></label>' +
+      '<h3>API de Conversões</h3><label class="cbx"><input type="checkbox" name="capi_enabled"' + (m.capi_enabled ? ' checked' : '') + '><span>Enviar o evento <b>Lead</b> também pelo servidor</span></label>' +
+      '<p class="hint">Token de acesso: ' + (env.capiTokenConfigured ? '<b style="color:var(--green)">configurado</b>' : '<b style="color:var(--red)">não configurado</b>') + '. O token nunca é exibido nem enviado ao navegador; para cadastrar ou substituir, use a variável <span class="mono">META_CAPI_ACCESS_TOKEN</span> do ' + (env.separate ? 'serviço do site público' : 'servidor') + ' no Railway (armazenamento seguro de segredos).' + (env.testEventCode ? ' · Código de teste ativo.' : '') +
+      (env.separate ? (env.seenAt ? ' · Site público iniciado em ' + esc(env.seenAt) + '.' : ' · O site público ainda não se conectou ao banco.') : '') + '</p>' +
+      '<button class="btn primary" style="margin-top:12px">Salvar</button></form>' +
+      '<section class="panel"><h2>Eventos implementados</h2><ul class="list-kv">' +
+      '<li><span><b>PageView</b></span><span>carregamento da página</span></li><li><span><b>ViewContent</b></span><span>visualização da oferta</span></li>' +
+      '<li><span><b>StartRegistration</b> (personalizado)</span><span>primeira interação com o formulário</span></li>' +
+      '<li><span><b>Lead</b> — conversão principal</span><span>somente após o agendamento ser gravado no banco; mesmo event_id no Pixel e na API de Conversões (deduplicação); uma vez por agendamento</span></li>' +
+      '<li><span><b>Contact</b></span><span>clique no botão do WhatsApp</span></li><li><span><b>Schedule</b> (opcional)</span><span>agendamento confirmado</span></li></ul>' +
+      '<p class="hint" style="margin-top:10px">Enviados à Meta: WhatsApp e primeiro nome em hash SHA-256, IP, navegador e identificadores de clique. Nunca são enviados idade, informações clínicas ou de saúde.</p></section>' +
+      '<section class="panel"><h2>Últimos envios pela API de Conversões</h2>' + (d.metaLog.length ? '<ul class="list-kv">' + d.metaLog.map(function (e) { return '<li><span>' + esc(e.at) + ' · ' + esc(e.event_name) + ' · ' + esc(e.protocol || '') + '</span><span class="pill ' + (e.status === 'sent' ? 's-COMPARECEU' : 's-NAO_COMPARECEU') + '">' + esc(e.status) + '</span></li>'; }).join('') + '</ul>' : '<p class="hint">Nenhum envio ainda.</p>') + '</section>' +
+      '<section class="panel" id="isec"><h2>SEGURANÇA DAS INTEGRAÇÕES</h2><ul class="list-kv"><li><span>Status da proteção</span><b style="color:var(--green)">Ativa</b></li><li><span>Desbloqueio</span><span>temporário, nesta sessão; expira após 10 minutos sem uso e ao sair da conta</span></li></ul>' +
+      '<form id="ipw" novalidate><h3>Alterar senha de Integrações</h3><div class="form-grid">' + pwField('current', 'Senha atual de Integrações', 'off') + pwField('next', 'Nova senha (12+ caracteres)', 'new-password') + pwField('confirm', 'Confirmar nova senha', 'new-password') + '</div>' +
+      '<p class="err" id="ipw-err" hidden></p><button class="btn primary">Alterar senha</button></form>' +
+      '<h3>Sessões de acesso</h3><p class="hint">Bloqueia imediatamente as Integrações em todos os dispositivos (inclusive este).</p><button class="btn danger" id="revoke" style="margin-top:8px">Revogar sessões de acesso às integrações</button></section>';
+    $('#relock').addEventListener('click', function () { api('POST', '/api/admin/integrations/lock').then(function () { clearTimeout(integrIdle); renderUnlock(); }).catch(fail); });
+    $('form[data-sec=meta]').addEventListener('submit', function (e) {
+      e.preventDefault(); var f = e.target;
+      api('PUT', '/api/admin/settings/meta', { pixel_enabled: f.pixel_enabled.checked, pixel_id: f.pixel_id.value, require_consent: f.require_consent.checked, schedule_event: f.schedule_event.checked, capi_enabled: f.capi_enabled.checked })
+        .then(function () { armIntegrationsIdle(10); toast('Integração salva.'); }).catch(integrFail);
+    });
+    $('#ipw').addEventListener('submit', function (e) {
+      e.preventDefault(); var f = e.target, err = $('#ipw-err'); err.hidden = true;
+      if (f.next.value !== f.confirm.value) { err.textContent = 'As senhas não conferem.'; err.hidden = false; return; }
+      api('POST', '/api/admin/integrations/password', { current: f.current.value, next: f.next.value, confirm: f.confirm.value })
+        .then(function () { armIntegrationsIdle(10); f.reset(); toast('Senha de Integrações alterada. Outras sessões foram bloqueadas.'); })
+        .catch(function (x) { if (x.status === 423) return integrFail(x); err.textContent = x.message; err.hidden = false; });
+    });
+    $('#revoke').addEventListener('click', function () {
+      if (!confirm('Bloquear as Integrações em todas as sessões, inclusive esta?')) return;
+      api('POST', '/api/admin/integrations/revoke').then(function () { clearTimeout(integrIdle); toast('Sessões de acesso revogadas.'); renderUnlock(); }).catch(integrFail);
+    });
+  }
+  function integrFail(x) { if (x && x.status === 423) { toast('Integrações bloqueadas. Confirme a senha novamente.', true); renderUnlock(); return; } fail(x); }
+
   // ---------- Início ----------
-  api('GET', '/api/admin/me').then(function (d) {
+  if (/^#\/convite\//.test(location.hash)) route(); // ativação de convite não precisa de sessão
+  else api('GET', '/api/admin/me').then(function (d) {
     me = d.admin;
     if (me.mustChangePassword) renderChangePassword(); else route();
   }).catch(function () { /* renderLogin já foi chamado em 401 */ if (!me) renderLogin(); });

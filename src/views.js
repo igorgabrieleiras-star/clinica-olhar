@@ -93,7 +93,7 @@ export function renderLanding({ settings, availability, faq, logoVersion }) {
     availability,
     clinic: { name: s.clinic.name, whatsapp: s.clinic.whatsapp, address: s.clinic.address, maps_url: s.clinic.maps_url },
     rules: { min_age: s.booking.min_age, max_age: s.booking.max_age, minor_rule: s.booking.minor_rule },
-    socialProof: !!s.social_proof.enabled,
+    socialProof: !!s.social_proof.enabled || s.social_proof.institutional !== false,
     threshold: Number(s.booking.scarcity_threshold) || 0,
     meta: {
       pixel: !!(s.meta.pixel_enabled && s.meta.pixel_id),

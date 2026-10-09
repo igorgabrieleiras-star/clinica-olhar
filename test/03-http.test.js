@@ -85,11 +85,13 @@ test('15. Agendamento pelo site devolve a confirmação completa', async () => {
 });
 
 test('Avisos de agendamento: só com a função ligada e com autorização do paciente', async () => {
-  assert.deepEqual((await call('GET', '/api/activity')).data.items, []);
+  // Sem a função ligada: só avisos institucionais da clínica (nenhum paciente).
+  const before = (await call('GET', '/api/activity')).data.items;
+  assert.ok(before.length > 0 && before.every((i) => i.kind === 'info' && !i.firstName));
   const s = await getSettings({ fresh: true });
   await saveSection('social_proof', { ...s.social_proof, enabled: true });
   await call('POST', '/api/bookings', booking({ name: 'Roberto Alves', whatsapp: '92988880000', consent_social: false, time: '10:00' }));
-  const items = (await call('GET', '/api/activity')).data.items;
+  const items = (await call('GET', '/api/activity')).data.items.filter((i) => i.kind !== 'info');
   assert.deepEqual(items.map((i) => i.firstName), ['Mariana']);
 });
 
@@ -171,6 +173,9 @@ test('Agenda: bloquear horário e data, configurar vagas', async () => {
 });
 
 test('Configurações: validação e efeito no site', async () => {
+  // Meta Pixel fica na área de Integrações: exige a senha exclusiva (criada no primeiro acesso).
+  assert.equal((await call('PUT', '/api/admin/settings/meta', { pixel_enabled: true, pixel_id: '1234567890' })).status, 423);
+  assert.equal((await call('POST', '/api/admin/integrations/setup', { password: 'SenhaIntegracoes2026', confirm: 'SenhaIntegracoes2026' })).status, 201);
   assert.equal((await call('PUT', '/api/admin/settings/meta', { pixel_enabled: true, pixel_id: 'abc' })).status, 422);
   assert.equal((await call('PUT', '/api/admin/settings/meta', { pixel_enabled: true, pixel_id: '1234567890', require_consent: true })).status, 200);
   assert.equal((await call('PUT', '/api/admin/settings/clinic', { name: 'Clínica Olhar', whatsapp: '(92) 98123-4567', address: 'Av. Exemplo, 100 — Centro, Manaus' })).status, 200);

@@ -42,7 +42,8 @@ export async function login(email, password) {
   const normalized = String(email || '').trim().toLowerCase();
   const { rows } = await q('SELECT * FROM admins WHERE email = $1', [normalized]);
   const admin = rows[0];
-  if (!admin) {
+  // Conta desativada responde como inexistente (não revela quais e-mails têm acesso).
+  if (!admin || admin.disabled_at) {
     dummyHash ||= await hashPassword('senha-inexistente-123');
     await verifyPassword(String(password || ''), dummyHash);
     return { ok: false, reason: 'invalid' };
@@ -69,10 +70,13 @@ export async function login(email, password) {
 export async function sessionAdmin(token) {
   if (!token || token.length > 100) return null;
   const { rows } = await q(
-    `SELECT a.* FROM admin_sessions s JOIN admins a ON a.id = s.admin_id WHERE s.id = $1 AND s.expires_at > now()`,
+    `SELECT a.*, s.id AS session_id, s.created_at AS session_created, s.integrations_until
+       FROM admin_sessions s JOIN admins a ON a.id = s.admin_id
+      WHERE s.id = $1 AND s.expires_at > now() AND a.disabled_at IS NULL`,
     [tokenHash(token)],
   );
-  return rows[0] ? publicAdmin(rows[0]) : null;
+  if (!rows[0]) return null;
+  return { ...publicAdmin(rows[0]), sessionId: rows[0].session_id, sessionCreated: rows[0].session_created, integrationsUntil: rows[0].integrations_until };
 }
 
 export async function logout(token) {
@@ -91,19 +95,24 @@ export async function changePassword(adminId, current, next, keepToken) {
   return { ok: true };
 }
 
-export async function createAdmin({ email, name, password, mustChange = true }) {
+export async function createAdmin({ email, name, password, mustChange = true, role = null }) {
   const problem = passwordProblem(password);
   if (problem) throw new Error(problem);
+  // Sem papel informado: o primeiro administrador do sistema é o principal; os demais são administradores.
+  const { rows: [p] } = await q("SELECT count(*) AS n FROM admins WHERE role = 'principal' AND disabled_at IS NULL");
+  const finalRole = role || (p.n === 0 ? 'principal' : 'admin');
   const { rows } = await q(
-    `INSERT INTO admins (email, name, password_hash, must_change_password) VALUES ($1,$2,$3,$4)
+    `INSERT INTO admins (email, name, password_hash, must_change_password, role) VALUES ($1,$2,$3,$4,$5)
      ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, must_change_password = EXCLUDED.must_change_password,
        failed_attempts = 0, locked_until = NULL
      RETURNING id`,
-    [String(email).trim().toLowerCase(), name || 'Administrador', await hashPassword(password), mustChange],
+    [String(email).trim().toLowerCase(), name || 'Administrador', await hashPassword(password), mustChange, finalRole],
   );
   return rows[0].id;
 }
 
+export { tokenHash };
+
 function publicAdmin(a) {
-  return { id: a.id, email: a.email, name: a.name, mustChangePassword: a.must_change_password };
+  return { id: a.id, email: a.email, name: a.name, role: a.role || 'admin', mustChangePassword: a.must_change_password };
 }

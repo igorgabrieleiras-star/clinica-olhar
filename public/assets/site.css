@@ -385,6 +385,8 @@ button, input { font: inherit; color: inherit; }
 .toast.show { opacity: 1; transform: none; pointer-events: auto; }
 .toast.hide { opacity: 0; transform: none; transition: opacity .4s ease; }
 .toast b { color: var(--navy); }
+.toast.is-info { border-left-color: var(--brand); }
+.toast.is-info .t-ico { background: var(--blue-light); color: var(--blue); }
 .toast .t-ico { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: #EAF8EF; color: var(--green); flex: none; }
 .toast .t-ico svg { width: 16px; height: 16px; }
 .toast small { display: block; margin-top: 1px; color: var(--ink-soft); font-size: 12px; }
