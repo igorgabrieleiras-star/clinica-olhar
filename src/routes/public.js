@@ -7,7 +7,7 @@ import { parsePublicBooking, createBooking, confirmationView, hashIp, BookingErr
 import { sendConversion } from '../meta.js';
 import { cleanName, cleanWhatsapp, cleanAge, ValidationError } from '../validate.js';
 import { json, html, readJson, rateLimit, clientIp, parseCookies, HttpError, send } from '../http.js';
-import { renderLanding, renderPrivacy, renderNotFound } from '../views.js';
+import { renderLanding, renderPrivacy, renderNotFound, dayWordList } from '../views.js';
 
 async function loadFaq(settings) {
   const { rows } = await q('SELECT question, answer FROM faq WHERE active ORDER BY position, id');
@@ -134,11 +134,7 @@ export function registerPublic(router) {
 /** Avisos da clínica para os pop-ups: nunca simulam pacientes. Os dias citados vêm da agenda real. */
 export async function institutionalItems() {
   const av = await publicAvailability(now());
-  const words = [];
-  for (const d of av.dates || []) {
-    if (!d.available) continue;
-    for (const k of d.kinds || [d.kind]) { const w = k === 'hoje' ? 'hoje' : k === 'amanha' ? 'amanhã' : 'sábado'; if (!words.includes(w)) words.push(w); }
-  }
+  const words = dayWordList(av); // mesmas datas do texto principal (uma palavra por data)
   const items = [{ kind: 'info', text: 'Exame de vista 100% gratuito.', sub: 'Agende em poucos minutos' }];
   if (av.enabled && av.total > 0 && words.length) {
     items.push({ kind: 'info', text: `Horários disponíveis para ${words.length === 1 ? words[0] : words.slice(0, -1).join(', ') + ' e ' + words.at(-1)}.`, sub: 'Agendamentos abertos' });

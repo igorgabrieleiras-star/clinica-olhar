@@ -66,18 +66,35 @@ function seatsMarkup(av, threshold = 10) {
   return `<span class="seats-dot is-live" aria-hidden="true"></span><span class="seats-text"><strong class="seats-title">AGENDAMENTOS ABERTOS</strong><span class="seats-count">${count}</span></span>`;
 }
 
-/** "hoje, amanhã ou sábado" conforme as datas com vagas reais. */
-export function dayWords(av) {
+/**
+ * Datas do texto principal: exatamente as que o cliente pode escolher no calendário (com vagas), uma palavra por data.
+ *   seg–qui: hoje, amanhã ou sábado · sex: hoje ou amanhã (amanhã já é sábado) · sáb: hoje, amanhã ou o próximo sábado
+ *   dom: hoje, amanhã ou sábado. Datas bloqueadas ou sem horários não aparecem.
+ */
+export function dayWordList(av) {
+  const todayIso = av.now?.date || (av.dates || []).find((d) => d.isToday)?.date;
+  const todayIsSaturday = todayIso ? new Date(todayIso + 'T12:00:00Z').getUTCDay() === 6 : false;
   const words = [];
   for (const d of av.dates || []) {
     if (!d.available) continue;
-    for (const k of d.kinds || [d.kind]) {
-      const w = k === 'hoje' ? 'hoje' : k === 'amanha' ? 'amanhã' : 'sábado';
-      if (!words.includes(w)) words.push(w);
-    }
+    const kinds = d.kinds || [d.kind];
+    const w = d.isToday || kinds.includes('hoje') ? 'hoje' : kinds.includes('amanha') ? 'amanhã' : todayIsSaturday ? 'o próximo sábado' : 'sábado';
+    if (!words.includes(w)) words.push(w);
   }
-  if (!words.length) return '';
-  return words.length === 1 ? words[0] : words.slice(0, -1).join(', ') + ' ou ' + words[words.length - 1];
+  return words;
+}
+export function dayWords(av) {
+  const w = dayWordList(av);
+  if (!w.length) return '';
+  return w.length === 1 ? w[0] : w.slice(0, -1).join(', ') + ' ou ' + w[w.length - 1];
+}
+/** Texto principal (HTML), com as datas em negrito; sem vagas, não anuncia disponibilidade. */
+export function ledeHtml(av) {
+  const words = av.enabled && av.total > 0 ? dayWords(av) : '';
+  if (words) return `Faça seu cadastro e escolha seu horário para <b>${esc(words)}</b>.`;
+  return av.waitlist
+    ? 'No momento, todas as vagas foram preenchidas. Deixe seu cadastro na lista de espera e avisaremos quando abrirem novos horários.'
+    : 'No momento, não há horários disponíveis. Novas datas serão abertas em breve.';
 }
 
 const ICON = {
@@ -128,7 +145,7 @@ export function renderLanding({ settings, availability, faq, logoVersion }) {
           <span class="chart-3">grátis</span>
         </h1>
         <p class="acuity" aria-hidden="true"><span>E</span><span>F</span><span>P</span><span>T</span><span>O</span><span>Z</span><span>L</span><span>P</span><span>E</span><span>D</span></p>
-        <p class="lede" data-lede>${dayWords(availability) ? `Faça seu cadastro e escolha seu horário para <b>${esc(dayWords(availability))}</b>.` : 'Faça seu cadastro e escolha o melhor horário para realizar seu exame de vista gratuito.'}</p>
+        <p class="lede" data-lede>${ledeHtml(availability)}</p>
         <ul class="perks">
           <li>${ICON.check}Cadastro rápido</li>
           <li>${ICON.check}Escolha seu horário</li>

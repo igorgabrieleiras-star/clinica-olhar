@@ -256,19 +256,24 @@
         : 'VAGAS DISPONÍVEIS';
     }
     el.innerHTML = '<span class="seats-dot' + dot + '" aria-hidden="true"></span><span class="seats-text"><strong class="seats-title">' + title + '</strong><span class="seats-count">' + count + '</span></span>';
-    var words = dayWords();
+    var words = a.enabled && a.total > 0 ? dayWords() : '';
     var lede = $('[data-lede]');
     if (words) { lede.innerHTML = 'Faça seu cadastro e escolha seu horário para <b></b>.'; lede.querySelector('b').textContent = words; }
-    else lede.textContent = 'Faça seu cadastro e escolha o melhor horário para realizar seu exame de vista gratuito.';
+    else lede.textContent = a.waitlist
+      ? 'No momento, todas as vagas foram preenchidas. Deixe seu cadastro na lista de espera e avisaremos quando abrirem novos horários.'
+      : 'No momento, não há horários disponíveis. Novas datas serão abertas em breve.';
   }
+  // Uma palavra por data realmente selecionável (mesma regra do servidor): na sexta, "amanhã" já é o sábado;
+  // no sábado, o sábado oferecido é "o próximo sábado".
   function dayWords() {
-    var w = [];
-    (availability.dates || []).forEach(function (d) {
+    var a = availability, w = [];
+    var todayIso = a.now ? a.now.date : null;
+    var todaySat = todayIso ? new Date(todayIso + 'T12:00:00Z').getUTCDay() === 6 : false;
+    (a.dates || []).forEach(function (d) {
       if (!d.available) return;
-      (d.kinds || [d.kind]).forEach(function (k) {
-        var x = k === 'hoje' ? 'hoje' : k === 'amanha' ? 'amanhã' : 'sábado';
-        if (w.indexOf(x) < 0) w.push(x);
-      });
+      var k = d.kinds || [d.kind];
+      var x = d.isToday || k.indexOf('hoje') >= 0 ? 'hoje' : k.indexOf('amanha') >= 0 ? 'amanhã' : todaySat ? 'o próximo sábado' : 'sábado';
+      if (w.indexOf(x) < 0) w.push(x);
     });
     if (!w.length) return '';
     return w.length === 1 ? w[0] : w.slice(0, -1).join(', ') + ' ou ' + w[w.length - 1];
