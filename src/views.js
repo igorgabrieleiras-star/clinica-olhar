@@ -59,9 +59,10 @@ function seatsMarkup(av, threshold = 10) {
     return `<span class="seats-dot is-off" aria-hidden="true"></span><span class="seats-text"><strong class="seats-title">TODAS AS VAGAS FORAM PREENCHIDAS</strong><span class="seats-count">${av.waitlist ? 'Entre na lista de espera' : 'Novas datas em breve'}</span></span>`;
   }
   // "Agendamentos abertos" indica que o sistema aceita novos agendamentos (não é presença de atendentes).
+  // Sem cota de campanha configurada: mensagem genérica; o número só aparece quando é real e baixo ("Últimas N vagas").
   const count = av.total <= threshold
-    ? `<span class="seats-urgent">${av.total === 1 ? 'Última vaga disponível' : `Últimas <b>${av.total}</b> vagas disponíveis`}</span>`
-    : `<b>${av.total}</b> vagas disponíveis<span class="seats-cta"> — agende agora</span>`;
+    ? `<span class="seats-urgent">${av.total === 1 ? 'ÚLTIMA VAGA DISPONÍVEL' : `ÚLTIMAS <b>${av.total}</b> VAGAS DISPONÍVEIS`}</span>`
+    : 'VAGAS DISPONÍVEIS';
   return `<span class="seats-dot is-live" aria-hidden="true"></span><span class="seats-text"><strong class="seats-title">AGENDAMENTOS ABERTOS</strong><span class="seats-count">${count}</span></span>`;
 }
 
@@ -141,6 +142,13 @@ export function renderLanding({ settings, availability, faq, logoVersion }) {
             <div class="flow-head" data-head>
               <p class="step-count" data-step-count>Etapa 1 de 5</p>
               <ol class="progress" aria-hidden="true">${'<li></li>'.repeat(5)}</ol>
+            </div>
+            <div class="timer" data-timer hidden>
+              <div class="timer-row">
+                <span class="timer-label">TEMPO PARA CONCLUIR SUA RESERVA</span>
+                <span class="timer-clock" data-timer-clock role="timer" aria-label="Tempo para concluir sua reserva">10:00</span>
+              </div>
+              <p class="timer-msg" data-timer-msg aria-live="polite" hidden></p>
             </div>
 
             <div class="hp" aria-hidden="true"><label>Não preencha<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>

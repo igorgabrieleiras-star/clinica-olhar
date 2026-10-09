@@ -250,9 +250,10 @@
     } else {
       // "Agendamentos abertos" = o sistema aceita novos agendamentos (não indica atendentes online).
       dot = ' is-live';
+      // Sem cota de campanha: mensagem genérica. O número só aparece quando é real e baixo.
       count = a.total <= (boot.threshold || 0)
-        ? '<span class="seats-urgent">' + (a.total === 1 ? 'Última vaga disponível' : 'Últimas <b>' + a.total + '</b> vagas disponíveis') + '</span>'
-        : '<b>' + a.total + '</b> vagas disponíveis<span class="seats-cta"> — agende agora</span>';
+        ? '<span class="seats-urgent">' + (a.total === 1 ? 'ÚLTIMA VAGA DISPONÍVEL' : 'ÚLTIMAS <b>' + a.total + '</b> VAGAS DISPONÍVEIS') + '</span>'
+        : 'VAGAS DISPONÍVEIS';
     }
     el.innerHTML = '<span class="seats-dot' + dot + '" aria-hidden="true"></span><span class="seats-text"><strong class="seats-title">' + title + '</strong><span class="seats-count">' + count + '</span></span>';
     var words = dayWords();
@@ -486,11 +487,53 @@
 
   // StartRegistration: uma vez por sessão, na primeira interação com o formulário.
   var started = !!ss('olhar_started');
+  // O cronômetro começa quando o visitante digita ou marca algo (não no toque em botões, para não deslocar a tela).
+  function startTimer(e) { if (typeof current === 'number' && e.target.name && e.target.name !== 'website') timer.start(); }
+  form.addEventListener('input', startTimer);
+  form.addEventListener('change', startTimer);
   form.addEventListener('focusin', function () {
     if (started) return;
     started = true; ss('olhar_started', true);
     track('trackCustom', 'StartRegistration', { content_name: 'Exame de vista gratuito' });
   });
+
+
+  // ---------------- Cronômetro de 10 minutos ----------------
+  // Não existe reserva temporária de horário: o cronômetro é um guia de tempo de preenchimento.
+  // Ao zerar, a disponibilidade é atualizada e os dados preenchidos são mantidos — nada é cancelado.
+  var timer = (function () {
+    var KEY = 'olhar_timer_v1', LIMIT = 600;
+    var box = $('[data-timer]'), clock = $('[data-timer-clock]'), msg = $('[data-timer-msg]');
+    var startAt = null, iv = null, finished = false, phase = '';
+    function fmt(sec) { var m = Math.floor(sec / 60), x = sec % 60; return (m < 10 ? '0' : '') + m + ':' + (x < 10 ? '0' : '') + x; }
+    function setPhase(p) { if (p === phase) return; phase = p; box.className = 'timer' + (p ? ' ' + p : ''); }
+    function tick() {
+      var left = Math.max(0, LIMIT - Math.floor((Date.now() - startAt) / 1000));
+      clock.textContent = fmt(left);
+      if (left === 0) {
+        setPhase('is-over');
+        msg.textContent = 'Tempo sugerido encerrado. Seus dados foram mantidos — confira os horários atualizados e conclua seu agendamento.';
+        msg.hidden = false;
+        clearInterval(iv); iv = null;
+        if (!finished) { finished = true; autoRefresh(); }
+        return;
+      }
+      setPhase(left >= 300 ? '' : left >= 120 ? 'is-deep' : left > 60 ? 'is-warn' : 'is-crit');
+      if (left <= 60) { if (msg.hidden) { msg.textContent = 'Falta menos de 1 minuto para concluir sua reserva.'; msg.hidden = false; } }
+      else msg.hidden = true;
+    }
+    function run() { box.hidden = false; tick(); if (!iv && !finished) iv = setInterval(tick, 1000); }
+    return {
+      start: function () {
+        if (startAt !== null) return;
+        startAt = Number(ss(KEY)) || Date.now();
+        ss(KEY, startAt);
+        run();
+      },
+      resume: function () { var v = Number(ss(KEY)); if (v) { startAt = v; run(); } },
+      stop: function () { clearInterval(iv); iv = null; box.hidden = true; startAt = null; finished = false; phase = null; ss(KEY, null); },
+    };
+  })();
 
   // ---------------- Envio ----------------
   function errorMessageFor(data) {
@@ -553,6 +596,7 @@
   function showFormError(msg) { var fe = $('[data-form-error]'); fe.textContent = msg; fe.hidden = false; fe.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
 
   function onBooked(b) {
+    timer.stop();
     ss(DONE, b);
     ss(STORE, null);
     // Lead: somente após gravação no banco; uma vez por agendamento (event_id usado também na API de Conversões).
@@ -594,7 +638,7 @@
       state = { step: 1, name: '', age: '', guardian_name: '', guardian_ack: false, whatsapp: state.whatsapp || '', consent_data: false, consent_marketing: false, consent_social: false, date: null, time: null };
       var last = ss('olhar_last_phone'); if (last) state.whatsapp = last;
       save(); fillInputs();
-      $('[data-done]').hidden = true; form.hidden = false; idemKey = null;
+      $('[data-done]').hidden = true; form.hidden = false; idemKey = null; timer.stop();
       refreshAvailability().then(function () { showStep(1); field('name').focus(); });
     }
   });
@@ -606,6 +650,7 @@
 
   // ---------------- Lista de espera ----------------
   function showWaitlist() {
+    timer.stop();
     current = null;
     showStep('waitlist');
     var canJoin = availability.waitlist && state.name && state.whatsapp && state.consent_data;
@@ -628,30 +673,54 @@
   }
 
   // ---------------- Avisos de agendamentos recentes (somente reais e autorizados) ----------------
+  // Pequenos, no canto inferior esquerdo, um por vez. Nunca cobrem campos, calendário, horários ou botões:
+  // se não houver espaço livre, o aviso é adiado; se o visitante rolar até um controle, ele some na hora.
   (function socialProof() {
     if (!boot.socialProof) return;
     var toast = $('[data-toast]');
-    var queue = [], shown = 0, formVisible = true, MAX = 4;
-    if ('IntersectionObserver' in window) {
-      new IntersectionObserver(function (entries) { formVisible = entries[0].isIntersecting; }, { threshold: 0.05 }).observe(card);
+    var queue = [], shown = 0, MAX = 4, hideT = null, tries = 0;
+    var GUARDED = 'input, select, textarea, button, a.btn, .calendar, .time-grid, .today-box, .cookie:not([hidden])';
+    function overlaps(r) {
+      return $$(GUARDED).some(function (el) {
+        if (el === toast || toast.contains(el)) return false;
+        var b = el.getBoundingClientRect();
+        if (!b.width || !b.height) return false;
+        return b.left < r.right + 6 && b.right > r.left - 6 && b.top < r.bottom + 6 && b.bottom > r.top - 6;
+      });
     }
-    function blocked() {
-      var mobile = window.matchMedia('(max-width: 767px)').matches;
-      return document.body.classList.contains('kb-open') || document.body.classList.contains('has-cookie') || (mobile && formVisible) || document.hidden;
-    }
+    function blocked() { return document.hidden || document.body.classList.contains('kb-open') || document.body.classList.contains('has-cookie'); }
     function ago(m) { return m < 60 ? 'há ' + m + ' min' : m < 120 ? 'há 1 hora' : m < 1440 ? 'há ' + Math.floor(m / 60) + ' horas' : 'recentemente'; }
+    function hide() {
+      if (toast.hidden) return;
+      clearTimeout(hideT);
+      toast.classList.remove('show'); toast.classList.add('hide');
+      setTimeout(function () { toast.hidden = true; toast.classList.remove('hide'); }, 400);
+    }
+    function guard() { if (!toast.hidden && (blocked() || overlaps(toast.getBoundingClientRect()))) hide(); }
+    window.addEventListener('scroll', guard, { passive: true });
+    window.addEventListener('resize', guard);
+    document.addEventListener('focusin', guard);
     function next() {
       if (shown >= MAX || !queue.length) return;
-      if (blocked()) { setTimeout(next, 5000); return; }
-      var it = queue.shift(); shown++;
+      var it = queue[0];
       toast.innerHTML = '<span class="t-ico" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M5 10.5l3.2 3.2L15 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>' +
-        '<span><strong></strong> agendou <span data-when></span>.<small>' + (it.demo ? 'Demonstração · ' : '') + ago(it.minutesAgo) + '</small></span>';
-      toast.querySelector('strong').textContent = it.firstName;
-      toast.querySelector('[data-when]').textContent = it.when || 'um exame';
+        '<span><b></b> <span data-what></span>.<small>' + (it.demo ? 'Demonstração · ' : '') + ago(it.minutesAgo) + '</small></span>';
+      toast.querySelector('b').textContent = it.firstName;
+      toast.querySelector('[data-what]').textContent = (it.action || 'agendou seu exame') + (it.when ? ' ' + it.when : '');
+      // Mede a posição sem exibir: só aparece se houver espaço livre.
+      toast.style.visibility = 'hidden'; toast.hidden = false;
+      var r = toast.getBoundingClientRect();
+      toast.hidden = true; toast.style.visibility = '';
+      if (blocked() || overlaps(r)) {
+        if (++tries > 24) { queue.shift(); tries = 0; } // não encontrou espaço: descarta este aviso
+        setTimeout(next, 5000);
+        return;
+      }
+      queue.shift(); tries = 0; shown++;
       toast.hidden = false;
-      requestAnimationFrame(function () { toast.classList.add('show'); });
-      setTimeout(function () { toast.classList.remove('show'); setTimeout(function () { toast.hidden = true; }, 350); }, 4000);
-      setTimeout(next, 22000);
+      requestAnimationFrame(function () { requestAnimationFrame(function () { toast.classList.add('show'); }); });
+      hideT = setTimeout(hide, 4000);
+      setTimeout(next, 20000);
     }
     setTimeout(function () {
       fetch('/api/activity').then(function (r) { return r.json(); }).then(function (d) { queue = (d.items || []).slice(0, MAX); next(); }).catch(function () {});
@@ -702,6 +771,7 @@
     if (resume >= 4 && !availableDates().length) resume = 3;
     showStep(resume);
   }
+  if (!done && !form.hidden && current !== 'waitlist') timer.resume(); // recarregou no meio do cadastro: continua de onde estava
   // Guarda o último WhatsApp usado para facilitar novo agendamento na mesma sessão.
   window.addEventListener('beforeunload', function () { if (state.whatsapp) ss('olhar_last_phone', state.whatsapp); });
 })();

@@ -133,7 +133,9 @@ with sync_playwright() as p:
     pg.screenshot(path=str(SHOTS / "m-01-primeira-tela.png"))
     seats = pg.inner_text("[data-seats]")
     # Quinta 10h: hoje 11:00–15:30 (8 horários × teto 3 = 24) + sexta (14 × 3 = 42) + sábado (14 × 3 = 42) = 108
-    check("Selo AGENDAMENTOS ABERTOS com total real (24 hoje + 42 sexta + 42 sábado = 108)", "AGENDAMENTOS ABERTOS" in seats and "108" in seats, seats.replace("\n", " "))
+    # Sem cota de campanha configurada: mensagem genérica (o total real 108 não vira número de destaque)
+    check("Selo compacto: AGENDAMENTOS ABERTOS · VAGAS DISPONÍVEIS (sem cota → mensagem genérica)", "AGENDAMENTOS ABERTOS" in seats and "VAGAS DISPONÍVEIS" in seats and "108" not in seats, seats.replace("\n", " "))
+    check("Selo: ponto verde pulsante", pg.evaluate("() => getComputedStyle(document.querySelector('.seats-dot.is-live'), '::after').animationName") == "pulse")
     check("Chamada dinâmica: escolha seu horário para hoje, amanhã ou sábado", "escolha seu horário para hoje, amanhã ou sábado" in pg.inner_text("[data-lede]"), pg.inner_text("[data-lede]"))
     title_visible = pg.locator(".chart-2").bounding_box()
     name_box = pg.locator('input[name="name"]').bounding_box()
@@ -162,6 +164,8 @@ with sync_playwright() as p:
     custom = [e for e in fbq_events(pg) if e[0] == "trackCustom" and e[1] == "StartRegistration"]
     check("Pixel: StartRegistration (personalizado) ao iniciar", len(custom) == 1, str(len(custom)))
     check("Indicador 'Etapa 2 de 5'", "2 de 5" in pg.inner_text("[data-step-count]"))
+    tclock = pg.inner_text("[data-timer-clock]")
+    check("Cronômetro aparece ao iniciar o cadastro (perto da barra de progresso)", pg.is_visible("[data-timer]") and (tclock.startswith("09:") or tclock == "10:00"), tclock)
     inputmode = pg.get_attribute('input[name="age"]', "inputmode")
     check("Idade abre teclado numérico", inputmode == "numeric")
 
@@ -335,6 +339,87 @@ with sync_playwright() as p:
     check("Marca: favicon, ícones de atalho, manifest e elementos gráficos publicados", all(v == 200 for v in statuses.values()) and len(info["favicon"]) >= 4, json.dumps(statuses))
     check("Marca: logomarca provisória removida", bc.request.get(BASE + "/favicon.svg").status == 404 and "<svg class=\"mark\"" not in bp.content())
     bc.close()
+
+    # ------------------------------------------------------------------ Cabeçalho: logomarca centralizada e +10px até a linha
+    for w in [320, 360, 375, 390, 430, 1440]:
+        c = browser.new_context(viewport={"width": w, "height": 800 if w < 768 else 900}, locale="pt-BR", reduced_motion="reduce")
+        hp = c.new_page(); block_external(hp); hp.goto(BASE + "/"); hp.wait_for_timeout(200)
+        g = hp.evaluate("""() => { const l = document.querySelector('.top .brand-logo').getBoundingClientRect(), t = document.querySelector('.top').getBoundingClientRect();
+          return { left: l.left, right: innerWidth - l.right, top: l.top - t.top, gap: (t.bottom - 4) - l.bottom, h: t.height, lh: l.height } }""")
+        expect_gap = 16 if w < 1024 else 18  # antes: 6 px (celular) / 8 px (desktop)
+        check(f"Cabeçalho {w}px: logomarca centralizada e linha ~10 px mais baixa", abs(g["left"] - g["right"]) <= 1.5 and abs(g["gap"] - expect_gap) <= 1 and abs(g["top"] - (10 if w < 1024 else 12)) <= 1, json.dumps({k: round(v, 1) for k, v in g.items()}))
+        if w in (390, 1440):
+            hp.screenshot(path=str(SHOTS / f"cabecalho-{w}.png"), clip={"x": 0, "y": 0, "width": w, "height": 140})
+        c.close()
+
+    # ------------------------------------------------------------------ Animações de entrada (300–600 ms) e movimento reduzido
+    c = browser.new_context(viewport={"width": 390, "height": 844}, locale="pt-BR")
+    ep = c.new_page(); block_external(ep); ep.goto(BASE + "/")
+    anim = ep.evaluate("""() => Object.fromEntries([['logo', '.top .brand-logo'], ['titulo', '.hero .chart'], ['selo', '.hero .seats'], ['form', '.hero .card']].map(([k, sel]) => {
+      const cs = getComputedStyle(document.querySelector(sel)); return [k, { name: cs.animationName, ms: parseFloat(cs.animationDuration) * 1000, delay: parseFloat(cs.animationDelay) * 1000 }] }))""")
+    ok = anim["logo"]["name"] == "fadeIn" and anim["titulo"]["name"] == "fadeUp" and anim["selo"]["delay"] > anim["titulo"]["delay"] and all(300 <= a["ms"] <= 600 for a in anim.values()) and anim["form"]["delay"] <= 100
+    check("Entrada: logo (fade), título (sobe), selo depois do título, formulário rápido — 300 a 600 ms", ok, json.dumps(anim))
+    c.close()
+    c = browser.new_context(viewport={"width": 390, "height": 844}, locale="pt-BR", reduced_motion="reduce")
+    ep = c.new_page(); block_external(ep); ep.goto(BASE + "/"); ep.wait_for_timeout(60)
+    op = ep.evaluate("() => ['.hero .chart', '.hero .seats', '.hero .card'].map(s => getComputedStyle(document.querySelector(s)).opacity)")
+    check("Movimento reduzido: conteúdo visível na hora, sem animação", all(o == "1" for o in op), str(op))
+    c.close()
+
+    # ------------------------------------------------------------------ Cronômetro: cores por faixa, último minuto e fim sem perder dados
+    c = browser.new_context(viewport={"width": 375, "height": 760}, locale="pt-BR")
+    tp = c.new_page(); block_external(tp); tp.goto(BASE + "/")
+    def timer_at(left):
+        tp.evaluate(f"() => sessionStorage.setItem('olhar_timer_v1', String(Date.now() - {(600 - left) * 1000}))")
+        tp.reload(); tp.wait_for_selector("[data-timer]:not([hidden])", timeout=3000); tp.wait_for_timeout(150)
+        return tp.evaluate("() => ({ cls: document.querySelector('[data-timer]').className, clock: document.querySelector('[data-timer-clock]').textContent, msg: document.querySelector('[data-timer-msg]').hidden ? '' : document.querySelector('[data-timer-msg]').textContent, color: getComputedStyle(document.querySelector('[data-timer-clock]')).color })")
+    phases = {n: timer_at(n) for n in (420, 200, 90, 45)}
+    check("Cronômetro 10:00–05:00 azul institucional", phases[420]["cls"] == "timer" and phases[420]["clock"][:3] in ("06:", "07:"), json.dumps(phases[420]))
+    check("Cronômetro 04:59–02:00 azul mais intenso", "is-deep" in phases[200]["cls"], json.dumps(phases[200]))
+    check("Cronômetro 01:59–01:01 laranja", "is-warn" in phases[90]["cls"] and phases[90]["msg"] == "", json.dumps(phases[90]))
+    check("Cronômetro último minuto: vermelho + aviso", "is-crit" in phases[45]["cls"] and phases[45]["msg"] == "Falta menos de 1 minuto para concluir sua reserva." and phases[45]["color"] == "rgb(180, 35, 24)", json.dumps(phases[45]))
+    tp.screenshot(path=str(SHOTS / "m-cronometro-ultimo-minuto.png"))
+    timer_at(2)
+    tp.fill('input[name="name"]', "Teste Cronômetro")
+    tp.wait_for_timeout(2600)
+    end = tp.evaluate("() => ({ cls: document.querySelector('[data-timer]').className, msg: document.querySelector('[data-timer-msg]').textContent, name: document.querySelector('input[name=name]').value, step: !document.querySelector('[data-step=\"1\"]').hidden })")
+    check("Cronômetro zerado: atualiza disponibilidade, mantém os dados e não diz que a vaga foi perdida", "is-over" in end["cls"] and end["name"] == "Teste Cronômetro" and end["step"] and "perd" not in end["msg"].lower() and "mantidos" in end["msg"], json.dumps(end, ensure_ascii=False))
+    tb = tp.locator("[data-timer]").bounding_box(); nb = tp.locator('input[name="name"]').bounding_box()
+    check("Cronômetro não cobre campos", tb["y"] + tb["height"] <= nb["y"], f"{tb} {nb}")
+    c.close()
+
+    # ------------------------------------------------------------------ Pop-ups pequenos no canto (somente reais)
+    c = browser.new_context(viewport={"width": 1366, "height": 860}, locale="pt-BR")
+    dp = c.new_page(); block_external(dp); dp.goto(BASE + "/")
+    dp.evaluate("() => { try { localStorage.setItem('olhar_ads_consent', 'denied') } catch (e) {} }"); dp.reload()
+    dp.wait_for_selector(".toast.show", timeout=16000); dp.wait_for_timeout(400)
+    tb = dp.evaluate("() => { const r = document.querySelector('.toast').getBoundingClientRect(); return { left: r.left, bottom: innerHeight - r.bottom, width: r.width, text: document.querySelector('.toast').innerText } }")
+    check("Pop-up desktop: canto inferior esquerdo (20 px), até 280 px, texto real", abs(tb["left"] - 20) <= 1 and abs(tb["bottom"] - 20) <= 1 and tb["width"] <= 280 and "Mariana agendou seu exame" in tb["text"], json.dumps(tb, ensure_ascii=False))
+    dp.screenshot(path=str(SHOTS / "d-popup.png"))
+    gone = dp.wait_for_selector(".toast", state="hidden", timeout=6000)
+    check("Pop-up some sozinho (~4 s) e só um por vez", dp.locator(".toast").count() == 1)
+    c.close()
+
+    c = browser.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True, locale="pt-BR")
+    mp = c.new_page(); block_external(mp); mp.goto(BASE + "/")
+    mp.evaluate("() => { try { localStorage.setItem('olhar_ads_consent', 'denied') } catch (e) {} }"); mp.reload()
+    bad, seen = [], 0
+    for i in range(30):
+        if i == 12:
+            mp.evaluate("() => document.querySelector('.why').scrollIntoView()")  # área só de texto (sem controles)
+        r = mp.evaluate("""() => { const t = document.querySelector('.toast'); if (t.hidden || !t.classList.contains('show')) return null;
+          const a = t.getBoundingClientRect();
+          const hit = [...document.querySelectorAll('input, button, a.btn, .calendar, .time-grid, .today-box')].filter(el => { const b = el.getBoundingClientRect(); return b.width && b.height && b.left < a.right && b.right > a.left && b.top < a.bottom && b.bottom > a.top });
+          return { w: a.width, hit: hit.map(h => h.className || h.tagName).slice(0, 3) } }""")
+        if r:
+            seen += 1
+            if r["hit"]: bad.append(r)
+        mp.wait_for_timeout(700)
+    check("Pop-up celular: nunca cobre campos, calendário, horários ou botões", not bad, json.dumps(bad)[:200])
+    check("Pop-up celular: aparece só em área livre (adiado sobre o formulário)", seen > 0, f"amostras visíveis={seen}")
+    mp.evaluate("() => document.body.classList.add('kb-open')")
+    check("Pop-up oculto com o teclado aberto", mp.evaluate("() => getComputedStyle(document.querySelector('.toast')).display") == "none")
+    c.close()
 
     for w in [320, 360, 375, 390, 414, 430, 768, 1280, 1440]:
         c = browser.new_context(viewport={"width": w, "height": 800 if w < 768 else 900}, locale="pt-BR")

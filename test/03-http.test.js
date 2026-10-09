@@ -46,7 +46,7 @@ test('Página inicial: SEO, segurança e sem Pixel quando desativado', async () 
   assert.match(r.data, /<title>Exame de Vista Grátis \| Clínica Olhar<\/title>/);
   assert.match(r.data, /Solicite seu exame de vista gratuito na Clínica Olhar/);
   assert.match(r.data, /AGENDAMENTOS ABERTOS/);
-  assert.match(r.data, /<b>\d+<\/b> vagas disponíveis/);
+  assert.match(r.data, /AGENDAMENTOS ABERTOS<\/strong><span class="seats-count">(VAGAS DISPONÍVEIS|<span class="seats-urgent">)/);
   assert.match(r.headers.get('content-security-policy'), /default-src 'self'/);
   assert.doesNotMatch(r.headers.get('content-security-policy'), /facebook/);
   assert.equal(r.headers.get('x-frame-options'), 'DENY');

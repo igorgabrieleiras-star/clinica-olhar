@@ -117,9 +117,10 @@ export function registerPublic(router) {
     // Exemplos fictícios apenas fora de produção e só se ligados explicitamente, sempre marcados como demonstração.
     if (!items.length && !config.isProd && process.env.DEMO_ACTIVITY === 'true') {
       items = [
-        { firstName: 'Mariana', when: 'para quinta-feira, às 15h', minutesAgo: 3, demo: true },
-        { firstName: 'João', when: 'para sábado, às 9h', minutesAgo: 12, demo: true },
-        { firstName: 'Carla', when: 'para amanhã, às 11h', minutesAgo: 25, demo: true },
+        { firstName: 'Mariana', when: 'para sábado, às 10h', minutesAgo: 3, demo: true },
+        { firstName: 'Carlos', action: 'concluiu seu cadastro', minutesAgo: 6, demo: true },
+        { firstName: 'Fernanda', action: 'confirmou seu exame', when: 'para amanhã, às 15h', minutesAgo: 12, demo: true },
+        { firstName: 'João', action: 'realizou seu agendamento', when: 'para quinta-feira, às 11h', minutesAgo: 25, demo: true },
       ];
     }
     json(req, res, 200, { items }, { 'cache-control': 'public, max-age=30' });
