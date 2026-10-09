@@ -732,7 +732,7 @@
     }
     setTimeout(function () {
       fetch('/api/activity').then(function (r) { return r.json(); }).then(function (d) { queue = (d.items || []).slice(0, MAX); next(); }).catch(function () {});
-    }, 9000);
+    }, 5000);
   })();
 
   // Teclado aberto no celular: esconde elementos flutuantes para não cobrirem o campo.

@@ -391,7 +391,10 @@ button, input { font: inherit; color: inherit; }
 .toast .t-ico svg { width: 16px; height: 16px; }
 .toast small { display: block; margin-top: 1px; color: var(--ink-soft); font-size: 12px; }
 @media (max-width: 767px) {
-  .toast { left: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); max-width: min(250px, calc(100vw - 24px)); padding: 8px 12px 8px 10px; font-size: 13px; gap: 8px; }
+  /* Celular: no topo da tela (sobre o cabeçalho/título), onde não há campos nem botões do agendamento */
+  .toast { left: 50%; right: auto; top: calc(8px + env(safe-area-inset-top)); bottom: auto; width: max-content; max-width: min(320px, calc(100vw - 24px)); padding: 8px 12px 8px 10px; font-size: 13px; gap: 8px; transform: translate(-50%, -14px); }
+  .toast.show { transform: translate(-50%, 0); }
+  .toast.hide { transform: translate(-50%, 0); }
   .toast .t-ico { width: 22px; height: 22px; }
   .toast small { font-size: 11.5px; }
 }
