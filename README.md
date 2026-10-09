@@ -238,10 +238,14 @@ O sistema **nasce com agendamentos fechados e sem endereço** — nada é invent
 
 ## 9. Como as regras funcionam
 
-### Datas oferecidas (fuso America/Manaus)
-- Sempre **amanhã** e o **próximo sábado**. Se amanhã já é sábado (hoje sexta), aparece uma só opção. Se hoje é sábado, as opções são domingo e o sábado seguinte.
-- Datas bloqueadas, fechadas ou lotadas somem. Sem nenhuma data com vagas: mensagem "TODAS AS VAGAS FORAM PREENCHIDAS" e lista de espera (sem confirmar agendamento).
-- O servidor recalcula tudo a cada reserva; enviar outra data pela API é recusado.
+### Datas oferecidas (fuso America/Manaus, relógio do servidor)
+- **HOJE**, **AMANHÃ** e o **PRÓXIMO SÁBADO**, calculados automaticamente todos os dias. Cada opção pode ser desligada em **Agenda → Configurações da agenda**.
+- Datas iguais aparecem uma vez só: na sexta, "AMANHÃ · SÁBADO". No sábado: HOJE (sábado), AMANHÃ (domingo) e PRÓXIMO SÁBADO (semana seguinte).
+- **Hoje** mostra apenas horários com a **antecedência mínima** (padrão 60 min). Ex.: às 13h20 o primeiro horário é 14h30 (grade de 30 min). Sem horários elegíveis — antes do fim do expediente ou depois das 17h —, hoje fica desabilitado e o destaque "EXAME AINDA HOJE" some.
+- **Limite de vagas do mesmo dia** (padrão 3 por horário): teto adicional para hoje, nunca acima da capacidade real.
+- O servidor revalida tudo na confirmação. Quem demorou e perdeu a antecedência recebe "Este horário não está mais disponível. Escolha outro horário." sem perder os dados preenchidos. A página também se atualiza sozinha a cada minuto.
+- Expediente padrão: **09:00–17:00, todos os dias**, 30 min por atendimento, 5 vagas por horário. Para fechar domingos ou feriados, use o horário por dia da semana ou as exceções por data; bloqueios sempre prevalecem.
+- O calendário mostra o mês inteiro; só as datas permitidas e com vagas reais ficam clicáveis.
 
 ### Vagas e concorrência
 - Cada horário tem capacidade própria. O contador do topo é a soma real das vagas livres nas datas oferecidas (considera capacidade, reservas ativas, bloqueios, limite diário e cancelamentos).
@@ -290,13 +294,13 @@ https://seu-dominio.com.br/?utm_source=facebook&utm_medium=paid&utm_campaign={{c
 ## 10. Testes
 
 ```bash
-npm test             # 55 testes de backend (banco olhar_test; o usuário de teste precisa de CREATEROLE para o teste de permissões)
+npm test             # 74 testes de backend (banco olhar_test; o usuário de teste precisa de CREATEROLE para o teste de permissões)
 npm run test:e2e     # E2E no navegador com os dois serviços separados; instruções no topo de test/e2e/run_e2e.py
 ```
 
 ### Resumo da última execução
 
-**Backend — 55/55 aprovados** (`node --test`, PostgreSQL 16)
+**Backend — 74/74 aprovados** (inclui 17 cenários de agendamento para hoje: antes das 9h, 10h, 13h20, perto das 17h, após o expediente, sexta→sábado, sábado→domingo, virada de mês/ano, bloqueios, lotação, antecedência, teto do mesmo dia, opções do painel e 20 reservas simultâneas) (`node --test`, PostgreSQL 16)
 - **Separação:** no site, `/admin`, `/api/admin/*` (inclusive o login) e `admin.js` → 404, e nenhum link de login/painel na página. No painel, o site, a política e a API de agendamento → 404; `robots.txt` bloqueia tudo; cabeçalho e HTML `noindex`.
 - **Integração:** agendamento feito no serviço do site aparece na lista do serviço do painel; horário bloqueado no painel deixa de ser oferecido no site e o contador cai na hora.
 - **Camadas do painel:** IPs (IPv4, IPv6, CIDR, endereços mapeados); senha de acesso (401 sem/errada, 200 certa, site não afetado); Cloudflare Access — token válido aceito; audiência errada, expirado, emissor falso, conteúdo adulterado e `alg: none` recusados.
@@ -308,7 +312,7 @@ npm run test:e2e     # E2E no navegador com os dois serviços separados; instru�
 - API de Conversões: Lead enviado uma única vez, dados em hash, sem idade.
 - Segurança: login, troca de senha no 1º acesso, CSRF, bloqueio após tentativas, limite de requisições, XSS, anti-robô, CSV seguro. LGPD: retenção, correção e exclusão.
 
-**Navegador (Chromium) — 59/59 verificações aprovadas**, com **dois processos separados** (site com o usuário `olhar_site`, painel com senha de acesso), simulando uma quinta-feira:
+**Navegador (Chromium) — 70/70 verificações aprovadas** (calendário, destaque de hoje, horários com vagas reais, atualização automática sem perder dados), com **dois processos separados** (site com o usuário `olhar_site`, painel com senha de acesso), simulando uma quinta-feira:
 - Site sem `/admin`, sem API do painel, sem `admin.js` e sem links de login; painel responde 401 sem a senha de acesso.
 - Primeiro acesso do admin com troca de senha obrigatória; configuração da agenda, WhatsApp, Pixel e avisos pelo painel — refletidas no site imediatamente (LISTEN/NOTIFY).
 - Fluxo completo no celular (390 px) com UTMs: validações, máscara `(92) 98888-7777`, teclado numérico, responsável para menor, duas datas (sexta 09/10 e sábado 10/10), 14 horários, resumo editável, protocolo `OLH-000001`, WhatsApp com protocolo.

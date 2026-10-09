@@ -40,16 +40,33 @@ ${extra}
 </head>`;
 }
 
-function seatsMarkup(av) {
+function seatsMarkup(av, threshold = 10) {
   if (!av.enabled || av.total === 0) {
     return `<span class="seats-dot is-off" aria-hidden="true"></span><span class="seats-text"><strong class="seats-title">TODAS AS VAGAS FORAM PREENCHIDAS</strong><span class="seats-count">${av.waitlist ? 'Entre na lista de espera' : 'Novas datas em breve'}</span></span>`;
   }
-  const title = av.scarce ? 'ÚLTIMAS VAGAS PARA EXAME GRATUITO' : 'VAGAS ABERTAS PARA EXAME GRATUITO';
-  const count = av.total === 1 ? 'Resta <b>1</b> vaga disponível' : `Restam <b>${av.total}</b> vagas disponíveis`;
-  return `<span class="seats-dot${av.scarce ? '' : ' is-calm'}" aria-hidden="true"></span><span class="seats-text"><strong class="seats-title">${title}</strong><span class="seats-count">${count}</span></span>`;
+  // "Agendamentos abertos" indica que o sistema aceita novos agendamentos (não é presença de atendentes).
+  const count = av.total <= threshold
+    ? `<span class="seats-urgent">${av.total === 1 ? 'Última vaga disponível' : `Últimas <b>${av.total}</b> vagas disponíveis`}</span>`
+    : `<b>${av.total}</b> vagas disponíveis — agende agora`;
+  return `<span class="seats-dot is-live" aria-hidden="true"></span><span class="seats-text"><strong class="seats-title">AGENDAMENTOS ABERTOS</strong><span class="seats-count">${count}</span></span>`;
+}
+
+/** "hoje, amanhã ou sábado" conforme as datas com vagas reais. */
+export function dayWords(av) {
+  const words = [];
+  for (const d of av.dates || []) {
+    if (!d.available) continue;
+    for (const k of d.kinds || [d.kind]) {
+      const w = k === 'hoje' ? 'hoje' : k === 'amanha' ? 'amanhã' : 'sábado';
+      if (!words.includes(w)) words.push(w);
+    }
+  }
+  if (!words.length) return '';
+  return words.length === 1 ? words[0] : words.slice(0, -1).join(', ') + ' ou ' + words[words.length - 1];
 }
 
 const ICON = {
+  bolt: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M11.3 1.8 4.2 11.2h5.1l-1 7 7.5-9.9H10.6l.7-6.5Z" fill="currentColor"/></svg>',
   check: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4.5 10.5l3.5 3.5 7.5-8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   whatsapp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38a9.9 9.9 0 0 0 4.74 1.21c5.46 0 9.91-4.45 9.91-9.91C21.95 6.45 17.5 2 12.04 2Zm0 18.15c-1.48 0-2.93-.4-4.2-1.15l-.3-.18-3.12.82.83-3.04-.2-.31a8.26 8.26 0 0 1-1.26-4.38c0-4.54 3.7-8.24 8.25-8.24 4.54 0 8.24 3.7 8.24 8.24 0 4.55-3.7 8.24-8.24 8.24Zm4.52-6.16c-.25-.12-1.47-.72-1.69-.81-.23-.08-.39-.12-.56.13-.16.24-.64.8-.78.97-.14.17-.29.19-.54.06-.25-.12-1.05-.39-1.99-1.23-.74-.66-1.23-1.47-1.38-1.72-.14-.25-.02-.38.11-.5.11-.11.25-.29.37-.43.13-.15.17-.25.25-.42.08-.16.04-.31-.02-.43-.06-.13-.56-1.35-.76-1.84-.2-.48-.41-.42-.56-.43h-.48c-.17 0-.43.06-.66.31-.22.25-.86.85-.86 2.07 0 1.22.89 2.4 1.01 2.56.12.17 1.75 2.67 4.23 3.74.59.26 1.05.41 1.41.52.59.19 1.13.16 1.56.1.48-.07 1.47-.6 1.67-1.18.21-.58.21-1.07.14-1.18-.06-.1-.22-.16-.47-.28Z"/></svg>',
 };
@@ -62,6 +79,7 @@ export function renderLanding({ settings, availability, faq, logoVersion }) {
     clinic: { name: s.clinic.name, whatsapp: s.clinic.whatsapp, address: s.clinic.address, maps_url: s.clinic.maps_url },
     rules: { min_age: s.booking.min_age, max_age: s.booking.max_age, minor_rule: s.booking.minor_rule },
     socialProof: !!s.social_proof.enabled,
+    threshold: Number(s.booking.scarcity_threshold) || 0,
     meta: {
       pixel: !!(s.meta.pixel_enabled && s.meta.pixel_id),
       pixelId: s.meta.pixel_id,
@@ -88,14 +106,14 @@ export function renderLanding({ settings, availability, faq, logoVersion }) {
   <section class="hero">
     <div class="wrap hero-grid">
       <div class="hero-copy">
-        <p class="seats" data-seats role="status" aria-live="polite">${seatsMarkup(availability)}</p>
+        <p class="seats" data-seats role="status" aria-live="polite">${seatsMarkup(availability, Number(s.booking.scarcity_threshold) || 0)}</p>
         <h1 class="chart">
           <span class="chart-1">Exame de vista</span>
           <span class="chart-2">100%</span>
           <span class="chart-3">grátis</span>
         </h1>
         <p class="acuity" aria-hidden="true"><span>E</span><span>F</span><span>P</span><span>T</span><span>O</span><span>Z</span><span>L</span><span>P</span><span>E</span><span>D</span></p>
-        <p class="lede">Faça seu cadastro e escolha o melhor horário para realizar seu exame de vista gratuito.</p>
+        <p class="lede" data-lede>${dayWords(availability) ? `Faça seu cadastro e escolha seu horário para <b>${esc(dayWords(availability))}</b>.` : 'Faça seu cadastro e escolha o melhor horário para realizar seu exame de vista gratuito.'}</p>
         <ul class="perks">
           <li>${ICON.check}Cadastro rápido</li>
           <li>${ICON.check}Escolha seu horário</li>
@@ -191,9 +209,22 @@ export function renderLanding({ settings, availability, faq, logoVersion }) {
 
             <!-- Etapa 4 -->
             <section class="step" data-step="4" aria-labelledby="t4" hidden>
-              <h2 id="t4" class="step-title" tabindex="-1">Quando deseja realizar seu exame?</h2>
-              <p class="step-sub" data-date-sub>Escolha uma das datas disponíveis.</p>
-              <div class="dates" data-dates role="radiogroup" aria-labelledby="t4"></div>
+              <h2 id="t4" class="step-title step-title-caps" tabindex="-1">ESCOLHA O MELHOR DIA PARA SEU EXAME</h2>
+              <p class="step-sub" data-date-sub>Confira as datas e os horários disponíveis.</p>
+              <div class="today-box" data-today hidden>
+                <div class="today-head">
+                  <p class="today-flag">${ICON.bolt}<span>EXAME AINDA HOJE</span></p>
+                  <span class="today-pill"><span class="pulse-dot" aria-hidden="true"></span>VAGAS PARA HOJE</span>
+                </div>
+                <p class="today-sub">Você ainda pode realizar seu exame hoje! Confira os horários disponíveis para atendimento.</p>
+                <ul class="today-slots" data-today-slots></ul>
+                <button class="btn btn-today" type="button" data-today-go>VER HORÁRIOS DE HOJE →</button>
+              </div>
+              <div class="calendar" data-calendar role="group" aria-labelledby="t4"></div>
+              <ul class="cal-legend" aria-hidden="true">
+                <li><i class="lg-on"></i>Disponível</li><li><i class="lg-off"></i>Indisponível</li><li><i class="lg-today"></i>Hoje</li>
+              </ul>
+              <p class="cal-picked" data-cal-picked hidden></p>
               <span class="field-error" data-error="date" role="alert"></span>
               <div class="actions">
                 <button class="btn btn-ghost" type="button" data-back>VOLTAR</button>
@@ -205,6 +236,7 @@ export function renderLanding({ settings, availability, faq, logoVersion }) {
             <section class="step" data-step="5" aria-labelledby="t5" hidden>
               <h2 id="t5" class="step-title" tabindex="-1">Qual horário fica melhor para você?</h2>
               <p class="chosen-date" data-chosen-date></p>
+              <p class="lead-note" data-lead-note hidden></p>
               <div class="times" data-times></div>
               <span class="field-error" data-error="time" role="alert"></span>
               <div class="summary" data-summary hidden>
@@ -216,6 +248,7 @@ export function renderLanding({ settings, availability, faq, logoVersion }) {
                   <div><dt>WhatsApp</dt><dd data-sum="whatsapp"></dd><button type="button" class="link" data-edit="3">Alterar</button></div>
                 </dl>
               </div>
+              <p class="last-seat" data-last-seat hidden>ÚLTIMA VAGA PARA ESTE HORÁRIO</p>
               <p class="form-error" data-form-error role="alert" hidden></p>
               <div class="actions actions-stack">
                 <button class="btn btn-confirm" type="submit" data-confirm>CONFIRMAR MEU EXAME GRÁTIS</button>

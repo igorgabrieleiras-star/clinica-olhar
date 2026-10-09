@@ -1,7 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { tx, q } from './db.js';
 import { publicCandidateDates, formatLongDate, isISODate } from './dates.js';
-import { dayAvailability, ensureSlots, effectiveRule } from './availability.js';
+import { dayAvailability, ensureSlots, effectiveRule, publicRules, optionsFor } from './availability.js';
 import { getSettings } from './settings.js';
 import { cleanName, cleanAge, cleanWhatsapp, cleanTime, optText, ValidationError, isUuid, formatWhatsapp } from './validate.js';
 
@@ -84,16 +84,22 @@ export async function createBooking(input, { now = new Date(), ipHash = null, ad
     if (existing) return { ...existing, replay: true };
   }
 
+  const settings = await getSettings();
+  // Fluxo público: só HOJE/AMANHÃ/SÁBADO (conforme o painel), com antecedência mínima calculada pelo relógio do servidor.
+  let dayOptions = {};
   if (!admin) {
-    const allowed = publicCandidateDates(now).map((c) => c.date);
-    if (!allowed.includes(input.date)) {
+    const rules = publicRules(settings);
+    const candidate = publicCandidateDates(now, rules.flags).find((c) => c.date === input.date);
+    if (!candidate) {
       throw new BookingError('DATE_NOT_ALLOWED', 'As datas disponíveis foram atualizadas. Escolha uma das opções exibidas.', 422);
     }
-    const settings = await getSettings();
     if (!settings.booking.enabled) throw new BookingError('BOOKING_CLOSED', 'Os agendamentos online estão fechados no momento.', 409);
+    dayOptions = optionsFor(candidate, rules, now);
+    if (dayOptions.minTime && input.time < dayOptions.minTime) {
+      throw new BookingError('SLOT_TOO_SOON', 'Este horário não está mais disponível. Escolha outro horário.', 409);
+    }
   }
 
-  const settings = await getSettings();
   try {
     const result = await tx(async (c) => {
       await c.query('SELECT pg_advisory_xact_lock($1)', [dateLockKey(input.date)]);
@@ -106,9 +112,10 @@ export async function createBooking(input, { now = new Date(), ipHash = null, ad
       if (!rule.open && !admin) throw new BookingError('DATE_UNAVAILABLE', 'Esta data não está disponível para agendamento.');
       await ensureSlots(input.date, c);
 
-      const day = await dayAvailability(input.date, c);
+      const day = await dayAvailability(input.date, c, dayOptions);
       const slot = day.slots.find((s) => s.time === input.time);
-      if (!slot || slot.blocked) throw new BookingError('SLOT_UNAVAILABLE', 'Este horário não está disponível. Escolha outro.');
+      if (!slot || slot.blocked) throw new BookingError('SLOT_UNAVAILABLE', 'Este horário não está mais disponível. Escolha outro horário.');
+      if (slot.eligible === false) throw new BookingError('SLOT_TOO_SOON', 'Este horário não está mais disponível. Escolha outro horário.');
       if (slot.free <= 0) throw new BookingError('SLOT_FULL', 'Este horário acabou de esgotar. Escolha outro horário.');
 
       // Paciente: reaproveita o cadastro com mesmo WhatsApp e mesmo nome.

@@ -11,9 +11,14 @@ export const DEFAULTS = {
     opening_hours_text: '',
   },
   booking: {
-    enabled: false, // a clínica abre os agendamentos depois de revisar a agenda
+    enabled: true, // agendamentos abertos por padrão; o painel pode fechar a qualquer momento
+    today_enabled: true, // HOJE (somente horários futuros com a antecedência mínima)
+    tomorrow_enabled: true, // AMANHÃ
+    saturday_enabled: true, // PRÓXIMO SÁBADO
+    min_lead_minutes: 60, // antecedência mínima para agendar no mesmo dia
+    same_day_cap: 3, // teto de pacientes por horário para HOJE (vazio = sem teto extra); nunca passa da capacidade real
     waitlist_enabled: true,
-    scarcity_threshold: 20, // abaixo disso o selo mostra "Últimas vagas"
+    scarcity_threshold: 10, // até este número o selo mostra "Últimas N vagas"
     min_age: null,
     max_age: null,
     minor_rule: 'guardian_required', // guardian_required | allowed | blocked

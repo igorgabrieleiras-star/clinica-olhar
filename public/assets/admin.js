@@ -286,7 +286,8 @@
     agendaDate = agendaDate || addDays(todayLocal(), 1);
     main().innerHTML = '<div class="page-head"><div><h1>Agenda</h1><p>Ocupação real de cada horário, bloqueios e regras de atendimento.</p></div></div>' +
       '<section class="panel"><div class="day-head"><div class="btn-row"><button class="btn small" data-d="-1">← Dia anterior</button><input type="date" id="ag-date" value="' + agendaDate + '" style="width:auto"><button class="btn small" data-d="1">Próximo dia →</button><button class="btn small" data-d="today">Hoje</button></div></div><div id="ag-day" style="margin-top:14px"></div></section>' +
-      '<section class="panel" id="rules-panel"><h2>CONFIGURAÇÕES DA AGENDA — horário padrão por dia da semana</h2><p class="hint">Ao salvar, os próximos 60 dias são atualizados. Horários que você editou manualmente não mudam, e horários com pacientes nunca são apagados.</p><div id="rules"></div></section>' +
+      '<form class="panel" id="site-opts"><h2>CONFIGURAÇÕES DA AGENDA — datas oferecidas no site</h2><p class="hint">O site calcula sozinho, todos os dias, as datas permitidas. Bloqueios de datas e horários sempre prevalecem.</p><div id="site-opts-body" class="empty">Carregando…</div></form>' +
+      '<section class="panel" id="rules-panel"><h2>CONFIGURAÇÕES DA AGENDA — horário de funcionamento por dia da semana</h2><p class="hint">Ao salvar, os próximos 60 dias são atualizados. Horários que você editou manualmente não mudam, e horários com pacientes nunca são apagados.</p><div id="rules"></div></section>' +
       '<section class="panel"><h2>Exceções por data</h2><p class="hint">Feriados, dias sem atendimento ou horário especial em uma data específica.</p><div id="overrides"></div></section>';
     $('#ag-date').addEventListener('change', function (e) { agendaDate = e.target.value; loadDay(); });
     $$('[data-d]').forEach(function (b) {
@@ -296,8 +297,34 @@
         $('#ag-date').value = agendaDate; loadDay();
       });
     });
-    loadDay(); loadRules();
+    loadDay(); loadRules(); loadSiteOptions();
   }
+  function loadSiteOptions() {
+    api('GET', '/api/admin/settings').then(function (d) {
+      var b = d.settings.booking;
+      var row = function (name, on, title, sub) { return '<label class="cbx"><input type="checkbox" name="' + name + '"' + (on ? ' checked' : '') + '><span><b>' + title + '</b> — ' + sub + '</span></label>'; };
+      $('#site-opts-body').className = '';
+      $('#site-opts-body').innerHTML =
+        row('enabled', b.enabled, 'Agendamentos online abertos', 'desligado, o site não aceita novos agendamentos.') +
+        row('today_enabled', b.today_enabled !== false, 'AGENDAMENTOS PARA HOJE', 'somente horários futuros, respeitando a antecedência mínima.') +
+        row('tomorrow_enabled', b.tomorrow_enabled !== false, 'AGENDAMENTOS PARA AMANHÃ', 'sempre que houver capacidade.') +
+        row('saturday_enabled', b.saturday_enabled !== false, 'AGENDAMENTOS PARA SÁBADO', 'o próximo sábado (no sábado, o da semana seguinte).') +
+        '<div class="form-grid">' +
+        '<label class="f"><span>ANTECEDÊNCIA MÍNIMA para hoje (minutos)</span><input type="number" name="min_lead_minutes" min="0" max="1440" step="5" value="' + (b.min_lead_minutes == null ? 60 : b.min_lead_minutes) + '"></label>' +
+        '<label class="f"><span>LIMITE DE VAGAS DO MESMO DIA (por horário)</span><input type="number" name="same_day_cap" min="1" max="500" placeholder="sem limite extra" value="' + (b.same_day_cap == null ? '' : b.same_day_cap) + '"></label>' +
+        '</div><p class="hint">O limite do mesmo dia é um teto adicional para HOJE: nunca passa da capacidade real do horário. Ex.: horário com 5 vagas e limite 3 → no máximo 3 pacientes agendados para hoje nesse horário.</p>' +
+        '<button class="btn primary" style="margin-top:10px">Salvar opções</button>';
+    }).catch(fail);
+  }
+  document.addEventListener('submit', function (e) {
+    if (!e.target || e.target.id !== 'site-opts') return;
+    e.preventDefault();
+    var f = e.target, body = {};
+    ['enabled', 'today_enabled', 'tomorrow_enabled', 'saturday_enabled'].forEach(function (n) { body[n] = $('[name=' + n + ']', f).checked; });
+    body.min_lead_minutes = $('[name=min_lead_minutes]', f).value;
+    body.same_day_cap = $('[name=same_day_cap]', f).value;
+    api('PUT', '/api/admin/settings/booking', body).then(function () { toast('Opções da agenda salvas. O site já foi atualizado.'); }).catch(fail);
+  });
   function loadDay() {
     var box = $('#ag-day');
     api('GET', '/api/admin/agenda?date=' + agendaDate).then(function (d) {
@@ -421,7 +448,7 @@
         '<form class="panel" data-sec="booking"><h2>Agendamento</h2>' +
         cb('enabled', s.booking.enabled, '<b>Agendamentos online abertos</b> — quando desligado, o site não aceita novos agendamentos.') +
         cb('waitlist_enabled', s.booking.waitlist_enabled, 'Oferecer lista de espera quando não houver vagas') +
-        '<div class="form-grid">' + inp('scarcity_threshold', 'Mostrar “Últimas vagas” quando restarem até', s.booking.scarcity_threshold, 'type="number" min="0"') +
+        '<div class="form-grid">' + inp('scarcity_threshold', 'Mostrar “Últimas N vagas” quando restarem até', s.booking.scarcity_threshold, 'type="number" min="0"') +
         inp('min_age', 'Idade mínima (vazio = sem regra)', s.booking.min_age, 'type="number" min="0" max="120"') +
         inp('max_age', 'Idade máxima (vazio = sem regra)', s.booking.max_age, 'type="number" min="0" max="120"') +
         '<label class="f"><span>Menores de 18 anos</span><select name="minor_rule"><option value="guardian_required">Aceitar com responsável (pede nome e confirmação)</option><option value="allowed">Aceitar sem exigências adicionais</option><option value="blocked">Não aceitar</option></select></label></div>' +

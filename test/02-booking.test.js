@@ -52,10 +52,12 @@ test('4. Validação do WhatsApp (máscara, DDD, nono dígito)', () => {
   assert.throws(() => parsePublicBooking({ name: 'Ana Souza', age: '30', whatsapp: '92988887777', consent_data: false, date: '2026-10-09', time: '08:00' }, { booking: {}, privacy: {} }), (e) => e.field === 'consent_data');
 });
 
-test('Regra de datas no servidor: recusa datas fora de amanhã/sábado e datas passadas', async () => {
+test('Regra de datas no servidor: só hoje/amanhã/sábado, nada passado, antecedência mínima hoje', async () => {
   await rejects(createBooking(person({ date: '2026-10-12' }), { now: THURSDAY }), 'DATE_NOT_ALLOWED');
-  await rejects(createBooking(person({ date: '2026-10-08' }), { now: THURSDAY }), 'DATE_NOT_ALLOWED');
   await rejects(createBooking(person({ date: '2026-10-07' }), { now: THURSDAY }), 'DATE_NOT_ALLOWED');
+  // Hoje (quinta, 10h): 10:30 tem menos de 1 hora de antecedência; 08:00 já passou
+  await rejects(createBooking(person({ date: '2026-10-08', time: '10:30' }), { now: THURSDAY }), 'SLOT_TOO_SOON');
+  await rejects(createBooking(person({ date: '2026-10-08', time: '08:00' }), { now: THURSDAY }), 'SLOT_TOO_SOON');
   // Sábado é aceito
   const b = await createBooking(person({ date: '2026-10-10', time: '08:00' }), { now: THURSDAY });
   assert.ok(b.protocol);
@@ -71,7 +73,7 @@ test('10/11. Horários reais e bloqueio de horário lotado', async () => {
   for (let i = 0; i < 2; i++) await createBooking(person({ time: '10:00' }), { now: THURSDAY });
   await rejects(createBooking(person({ time: '10:00' }), { now: THURSDAY }), 'SLOT_FULL');
   const pub = await publicAvailability(THURSDAY);
-  const t = pub.dates[0].times.find((x) => x.time === '10:00');
+  const t = pub.dates.find((d) => d.date === '2026-10-09').times.find((x) => x.time === '10:00');
   assert.equal(t.available, false, 'aparece como esgotado no site');
 });
 
@@ -94,7 +96,7 @@ test('Limite diário configurado é respeitado mesmo com vagas nos horários', a
   await createBooking(person({ date: '2026-10-10', time: '09:30' }), { now: THURSDAY });
   await rejects(createBooking(person({ date: '2026-10-10', time: '10:00' }), { now: THURSDAY }), 'SLOT_FULL');
   const pub = await publicAvailability(THURSDAY);
-  assert.equal(pub.dates.find((d) => d.kind === 'sabado').available, false);
+  assert.equal(pub.dates.find((d) => d.kinds.includes('sabado')).available, false);
   await q(`DELETE FROM date_overrides WHERE date='2026-10-10'`);
 });
 
@@ -144,21 +146,23 @@ test('Domingo fechado por padrão: no sábado só aparece o sábado seguinte', a
   assert.deepEqual(pub.dates.filter((d) => d.available).map((d) => d.date), ['2026-10-17']);
 });
 
-test('9. Contador de vagas = soma das vagas reais das datas oferecidas', async () => {
+test('9. Contador de vagas = soma das vagas reais das datas oferecidas (hoje com antecedência e teto)', async () => {
   const pub = await publicAvailability(THURSDAY);
+  const today = await dayAvailability('2026-10-08', null, { minTime: '11:00', sameDayCap: 3 });
   const fri = await dayAvailability('2026-10-09');
   const sat = await dayAvailability('2026-10-10');
-  assert.equal(pub.total, fri.remaining + sat.remaining);
-  assert.equal(pub.total, fri.slots.reduce((n, s) => n + s.free, 0) + sat.slots.reduce((n, s) => n + s.free, 0));
+  assert.equal(pub.total, today.remaining + fri.remaining + sat.remaining);
+  assert.equal(pub.total, pub.dates.reduce((n, d) => n + d.remaining, 0));
+  assert.equal(pub.total, [today, fri, sat].reduce((n, d) => n + d.slots.reduce((m, s) => m + s.free, 0), 0));
 });
 
-test('Sem vagas: as duas datas lotadas → total 0 e nenhuma data disponível', async () => {
-  await q(`UPDATE slots SET blocked = true, manual = true WHERE date IN ('2026-10-09','2026-10-10')`);
+test('Sem vagas: todas as datas lotadas/bloqueadas → total 0 e nenhuma data disponível', async () => {
+  await q(`UPDATE slots SET blocked = true, manual = true WHERE date IN ('2026-10-08','2026-10-09','2026-10-10')`);
   const pub = await publicAvailability(THURSDAY);
   assert.equal(pub.total, 0);
   assert.equal(pub.dates.some((d) => d.available), false);
   await rejects(createBooking(person({ time: '08:30' }), { now: THURSDAY }), 'SLOT_UNAVAILABLE');
-  await q(`UPDATE slots SET blocked = false, manual = false WHERE date IN ('2026-10-09','2026-10-10')`);
+  await q(`UPDATE slots SET blocked = false, manual = false WHERE date IN ('2026-10-08','2026-10-09','2026-10-10')`);
 });
 
 test('Agendamento fechado no painel → site não aceita reservas', async () => {

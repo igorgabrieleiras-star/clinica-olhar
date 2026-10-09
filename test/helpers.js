@@ -12,6 +12,19 @@ export async function resetDb() {
   await migrate({ log: () => {} });
   invalidateSettings();
   await saveSection('booking', { enabled: true, waitlist_enabled: true, scarcity_threshold: 20, min_age: null, max_age: null, minor_rule: 'guardian_required' });
+  // Agenda fixa de teste (independe do expediente padrão): seg–sex 08–16 com pausa 11–13, sábado 08–12, domingo fechado, 5 vagas.
+  await q(`UPDATE schedule_rules SET is_open = (weekday <> 0), open_time = '08:00',
+             close_time = CASE WHEN weekday = 6 THEN '12:00'::time ELSE '16:00'::time END,
+             lunch_start = CASE WHEN weekday BETWEEN 1 AND 5 THEN '11:00'::time END,
+             lunch_end = CASE WHEN weekday BETWEEN 1 AND 5 THEN '13:00'::time END,
+             interval_minutes = 30, capacity = 5`);
+}
+
+/** Desliga HOJE nos testes que verificam só a regra de amanhã/sábado. */
+export async function onlyTomorrowAndSaturday() {
+  const { getSettings } = await import('../src/settings.js');
+  const s = await getSettings({ fresh: true });
+  await saveSection('booking', { ...s.booking, today_enabled: false });
 }
 
 /** Uma quinta-feira às 10h em Manaus (14h UTC). */

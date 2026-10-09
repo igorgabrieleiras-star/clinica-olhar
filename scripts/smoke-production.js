@@ -34,7 +34,7 @@ async function call(base, method, path, { body, gate = base === PANEL, auth = tr
   return { status: res.status, data, headers: res.headers };
 }
 
-const testDate = publicCandidateDates(new Date())[0].date;
+const testDate = publicCandidateDates(new Date()).find((c) => c.kinds.includes('amanha')).date; // amanhã: não interfere nos horários de hoje
 let originalBooking = null;
 let overrideExisted = false;
 
@@ -109,7 +109,18 @@ try {
   check('Site: vagas da data de teste = 2 (reais, do banco)', remainingOn(av) === 2, String(remainingOn(av)));
   check('Site: horário 06:00 disponível', !!d?.times.find((t) => t.time === '06:00' && t.available));
   const page = await call(SITE, 'GET', '/');
-  check('Site: selo do topo mostra o total real de vagas', new RegExp(`Restam <b>${av.total}</b> vaga`).test(page.data), `total=${av.total}`);
+  check('Site: selo AGENDAMENTOS ABERTOS com o total real de vagas', /AGENDAMENTOS ABERTOS/.test(page.data) && new RegExp(`<b>${av.total}</b> vagas`).test(page.data), `total=${av.total}`);
+  // Hoje: só horários com pelo menos a antecedência mínima, pelo relógio do servidor (Manaus)
+  const tday = av.dates.find((x) => x.isToday);
+  if (tday) {
+    const [hh, mm] = av.now.time.split(':').map(Number);
+    const minM = hh * 60 + mm + (av.leadTime ?? 60);
+    const bad = tday.times.filter((t) => { const [h, m] = t.time.split(':').map(Number); return h * 60 + m < minM; });
+    check(`Site: hoje (${av.now.time} em Manaus) só oferece horários com ${av.leadTime} min de antecedência`, bad.length === 0, `primeiro=${tday.times[0]?.time || 'nenhum'}`);
+  }
+  check('Site: datas oferecidas são hoje/amanhã/sábado, sem duplicar', new Set(av.dates.map((x) => x.date)).size === av.dates.length && av.dates.every((x) => x.tag), av.dates.map((x) => `${x.tag}:${x.date}`).join(' '));
+  const pastTry = await call(SITE, 'POST', '/api/bookings', { body: { name: TEST_NAME, age: 30, whatsapp: '(92) 99999-0001', date: av.now.date, time: '00:00', consent_data: true, elapsed_ms: 12000, idempotency_key: randomUUID() } });
+  check('Site: horário passado de hoje recusado pelo servidor', pastTry.status === 409 || pastTry.status === 422, `${pastTry.status} ${pastTry.data.code}`);
 
   const bookingBody = {
     name: TEST_NAME, age: 30, whatsapp: '(92) 99999-0001', date: testDate, time: '06:00',

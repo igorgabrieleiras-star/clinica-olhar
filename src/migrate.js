@@ -17,16 +17,8 @@ const DEFAULT_FAQ = [
 ];
 
 async function seed(client) {
-  // Regras padrão (exemplo inicial — revise no painel antes de abrir os agendamentos)
-  const rules = [
-    [0, false, '08:00', '12:00', null, null, 30, 5],
-    [1, true, '08:00', '16:00', '11:00', '13:00', 30, 5],
-    [2, true, '08:00', '16:00', '11:00', '13:00', 30, 5],
-    [3, true, '08:00', '16:00', '11:00', '13:00', 30, 5],
-    [4, true, '08:00', '16:00', '11:00', '13:00', 30, 5],
-    [5, true, '08:00', '16:00', '11:00', '13:00', 30, 5],
-    [6, true, '08:00', '12:00', null, null, 30, 5],
-  ];
+  // Expediente da Clínica Olhar: 09:00–17:00 (horário de Manaus), todos os dias. Domingo pode ser bloqueado no painel.
+  const rules = [0, 1, 2, 3, 4, 5, 6].map((d) => [d, true, '09:00', '17:00', null, null, 30, 5]);
   for (const r of rules) {
     await client.query(
       `INSERT INTO schedule_rules (weekday, is_open, open_time, close_time, lunch_start, lunch_end, interval_minutes, capacity)

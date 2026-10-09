@@ -34,21 +34,42 @@ export function weekdayOf(iso) {
 }
 
 /**
- * Datas que o fluxo público pode oferecer: AMANHÃ e o PRÓXIMO SÁBADO.
- * - Sexta-feira: amanhã já é sábado → uma única opção.
- * - Sábado: amanhã é domingo; o sábado oferecido é o da semana seguinte.
+ * Datas que o fluxo público pode oferecer: HOJE, AMANHÃ e o PRÓXIMO SÁBADO (cada uma pode ser desligada no painel).
+ * - Datas iguais aparecem uma vez só (sexta-feira: amanhã já é sábado → "AMANHÃ · SÁBADO").
+ * - Sábado: hoje é sábado, amanhã é domingo e o "próximo sábado" é o da semana seguinte.
+ * Retorna em ordem cronológica: [{ date, kinds: ['hoje'|'amanha'|'sabado'], kind, tag, isToday, isSaturday }]
  */
-export function publicCandidateDates(now = new Date()) {
+export function publicCandidateDates(now = new Date(), flags = {}) {
+  const on = { today: flags.today !== false, tomorrow: flags.tomorrow !== false, saturday: flags.saturday !== false };
   const today = todayISO(now);
   const tomorrow = addDays(today, 1);
   const dow = weekdayOf(today);
-  const daysToSaturday = (6 - dow + 7) % 7 || 7; // nunca hoje
+  const daysToSaturday = (6 - dow + 7) % 7 || 7; // o "próximo sábado" nunca é hoje
   const saturday = addDays(today, daysToSaturday);
-  if (tomorrow === saturday) return [{ date: tomorrow, kind: 'amanha', isSaturday: true }];
-  return [
-    { date: tomorrow, kind: 'amanha', isSaturday: false },
-    { date: saturday, kind: 'sabado', isSaturday: true },
-  ];
+  const map = new Map();
+  const add = (date, kind) => { if (!map.has(date)) map.set(date, []); map.get(date).push(kind); };
+  if (on.today) add(today, 'hoje');
+  if (on.tomorrow) add(tomorrow, 'amanha');
+  if (on.saturday) add(saturday, 'sabado');
+  return [...map.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([date, kinds]) => ({
+    date,
+    kinds,
+    kind: kinds[0],
+    tag: candidateTag(kinds, dow),
+    isToday: date === today,
+    isSaturday: weekdayOf(date) === 6,
+  }));
+}
+
+function candidateTag(kinds, todayDow) {
+  const names = { hoje: 'HOJE', amanha: 'AMANHÃ', sabado: todayDow === 6 ? 'PRÓXIMO SÁBADO' : 'SÁBADO' };
+  return kinds.map((k) => names[k]).join(' · ');
+}
+
+/** Primeiro horário permitido hoje: agora + antecedência mínima (HH:MM). null se já passou do fim do dia. */
+export function earliestTimeToday(now = new Date(), leadMinutes = 60) {
+  const min = timeToMinutes(nowTimeHM(now)) + Math.max(0, Number(leadMinutes) || 0);
+  return min >= 24 * 60 ? null : minutesToTime(min);
 }
 
 function capitalize(s) {

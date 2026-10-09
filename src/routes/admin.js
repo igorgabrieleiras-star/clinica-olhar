@@ -62,7 +62,7 @@ function buildFilters(params) {
   const createdDay = "(a.created_at AT TIME ZONE 'America/Manaus')::date";
   if (period === 'hoje') add('a.date = ?', today);
   else if (period === 'amanha') add('a.date = ?', addDays(today, 1));
-  else if (period === 'sabado') add('a.date = ?', publicCandidateDates(now()).find((c) => c.isSaturday).date);
+  else if (period === 'sabado') add('a.date = ?', publicCandidateDates(now()).find((c) => c.kinds.includes('sabado')).date);
   else if (period === '7d') add(`${createdDay} >= ?`, addDays(today, -6));
   else if (period === 'mes') add(`${createdDay} >= ?`, today.slice(0, 8) + '01');
   else if (period === 'custom') {
@@ -146,7 +146,19 @@ function sanitizeSection(key, input) {
       const min = intOrNull(i.min_age, 0, 120, 'min_age');
       const max = intOrNull(i.max_age, 0, 120, 'max_age');
       if (min !== null && max !== null && max < min) throw new ValidationError('max_age', 'A idade máxima precisa ser maior que a mínima.');
-      return { enabled: bool(i.enabled), waitlist_enabled: bool(i.waitlist_enabled), scarcity_threshold: intOrNull(i.scarcity_threshold, 0, 10000, 'scarcity_threshold') ?? 0, min_age: min, max_age: max, minor_rule: minor };
+      return {
+        enabled: bool(i.enabled),
+        today_enabled: i.today_enabled === undefined ? d.today_enabled : bool(i.today_enabled),
+        tomorrow_enabled: i.tomorrow_enabled === undefined ? d.tomorrow_enabled : bool(i.tomorrow_enabled),
+        saturday_enabled: i.saturday_enabled === undefined ? d.saturday_enabled : bool(i.saturday_enabled),
+        min_lead_minutes: i.min_lead_minutes === undefined ? d.min_lead_minutes : (intOrNull(i.min_lead_minutes, 0, 1440, 'min_lead_minutes') ?? 0),
+        same_day_cap: i.same_day_cap === undefined ? d.same_day_cap : intOrNull(i.same_day_cap, 1, 500, 'same_day_cap'),
+        waitlist_enabled: bool(i.waitlist_enabled),
+        scarcity_threshold: intOrNull(i.scarcity_threshold, 0, 10000, 'scarcity_threshold') ?? 0,
+        min_age: min,
+        max_age: max,
+        minor_rule: minor,
+      };
     }
     case 'social_proof':
       return { enabled: bool(i.enabled), max_age_hours: intOrNull(i.max_age_hours, 1, 168, 'max_age_hours') ?? 48 };
@@ -219,7 +231,7 @@ export function registerAdmin(router) {
     const today = todayISO(n);
     const cands = publicCandidateDates(n);
     const tomorrow = addDays(today, 1);
-    const saturday = cands.find((c) => c.isSaturday).date;
+    const saturday = cands.find((c) => c.kinds.includes('sabado')).date;
     const { rows: [c] } = await q(
       `SELECT count(*) FILTER (WHERE status <> 'CANCELADO') AS total,
               count(*) FILTER (WHERE status <> 'CANCELADO' AND date = $1) AS today,
@@ -509,7 +521,8 @@ export function registerAdmin(router) {
     const admin = await requireAdmin(req);
     const body = await readJson(req);
     const current = await getSettings({ fresh: true });
-    let value = sanitizeSection(params.section, body);
+    // Agendamento: campos não enviados mantêm o valor atual (o painel pode salvar só parte das opções).
+    let value = sanitizeSection(params.section, params.section === 'booking' ? { ...current.booking, ...body } : body);
     if (params.section === 'privacy') value = { ...current.privacy, ...value };
     await saveSection(params.section, value);
     await audit(admin.id, 'settings_updated', 'settings', params.section, value);

@@ -130,7 +130,9 @@ with sync_playwright() as p:
     pg.wait_for_timeout(300)
     pg.screenshot(path=str(SHOTS / "m-01-primeira-tela.png"))
     seats = pg.inner_text("[data-seats]")
-    check("Selo de vagas mostra disponibilidade real (2 datas × 14 horários × 3 = 84)", "84" in seats, seats.replace("\n", " "))
+    # Quinta 10h: hoje 11:00–15:30 (8 horários × teto 3 = 24) + sexta (14 × 3 = 42) + sábado (14 × 3 = 42) = 108
+    check("Selo AGENDAMENTOS ABERTOS com total real (24 hoje + 42 sexta + 42 sábado = 108)", "AGENDAMENTOS ABERTOS" in seats and "108" in seats, seats.replace("\n", " "))
+    check("Chamada dinâmica: escolha seu horário para hoje, amanhã ou sábado", "escolha seu horário para hoje, amanhã ou sábado" in pg.inner_text("[data-lede]"), pg.inner_text("[data-lede]"))
     title_visible = pg.locator(".chart-2").bounding_box()
     name_box = pg.locator('input[name="name"]').bounding_box()
     check("Mobile: oferta e início do formulário na primeira tela", name_box and name_box["y"] + name_box["height"] < 844 * 1.35, f"campo nome y={name_box and round(name_box['y'])}")
@@ -195,21 +197,40 @@ with sync_playwright() as p:
     wait_step(pg, 4)
 
     # Etapa 4 — datas
-    cards = pg.locator("[data-dates] [data-date]")
-    labels = [cards.nth(i).inner_text().replace("\n", " ") for i in range(cards.count())]
-    check("Quinta-feira: duas opções (amanhã sexta 09/10 e sábado 10/10)", cards.count() == 2 and "09 de outubro" in labels[0] and "10 de outubro" in labels[1], " | ".join(labels))
-    pg.screenshot(path=str(SHOTS / "m-04-datas.png"))
-    cards.nth(0).click()
-    pg.wait_for_timeout(250)
-    check("Card selecionado recebe estado ativo", cards.nth(0).get_attribute("aria-checked") == "true")
-    pg.screenshot(path=str(SHOTS / "m-04b-data-selecionada.png"))
-    pg.click('[data-step="4"] [data-next]')
+    check("Etapa 4: chamada ESCOLHA O MELHOR DIA PARA SEU EXAME", "ESCOLHA O MELHOR DIA PARA SEU EXAME" in pg.inner_text("#t4"))
+    on_days = pg.locator(".calendar .cal-day.is-on")
+    on_list = [on_days.nth(i).get_attribute("data-date") for i in range(on_days.count())]
+    check("Calendário: só hoje (08), amanhã (09) e sábado (10) clicáveis", on_list == ["2026-10-08", "2026-10-09", "2026-10-10"], str(on_list))
+    off = pg.locator(".calendar span.cal-day.is-off")
+    check("Calendário: demais dias visíveis e desabilitados", off.count() >= 25, str(off.count()))
+    check("Calendário: hoje com indicador", pg.locator('.cal-day.is-today[data-date="2026-10-08"]').count() == 1)
+    wd = pg.inner_text(".cal-wd")
+    check("Calendário: cabeçalho DOM…SÁB", all(x in wd for x in ["DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SÁB"]))
+    check("Destaque EXAME AINDA HOJE visível", pg.is_visible("[data-today]") and "EXAME AINDA HOJE" in pg.inner_text("[data-today]"))
+    slots_today = pg.inner_text("[data-today-slots]").replace("\n", " ")
+    check("VAGAS PARA HOJE: próximos horários com vagas reais (11:00, 11:30, 13:00 — 3 vagas)", all(x in slots_today for x in ["11:00", "11:30", "13:00", "3 vagas"]), slots_today)
+    sw = pg.evaluate("() => document.documentElement.scrollWidth")
+    check("Calendário sem rolagem horizontal no celular", sw <= 390, f"scrollWidth={sw}")
+    pg.screenshot(path=str(SHOTS / "m-04-calendario.png"))
+    pg.locator(".calendar").scroll_into_view_if_needed()
+    pg.screenshot(path=str(SHOTS / "m-04b-calendario-grade.png"))
+    # "VER HORÁRIOS DE HOJE" seleciona hoje e mostra os horários elegíveis
+    pg.click("[data-today-go]")
+    wait_step(pg, 5)
+    t_first = pg.locator("[data-times] [data-time]").first
+    check("Hoje: primeiro horário 11:00 (antecedência 1h) com contagem de vagas", t_first.get_attribute("data-time") == "11:00" and "3 vagas" in t_first.inner_text(), t_first.inner_text().replace("\n", " "))
+    check("Hoje: aviso de antecedência mínima", pg.is_visible("[data-lead-note]"))
+    pg.screenshot(path=str(SHOTS / "m-05a-horarios-hoje.png"))
+    pg.click('[data-step="5"] [data-back]')
+    wait_step(pg, 4)
+    # Seleciona a sexta pela grade: carrega os horários automaticamente
+    pg.click('.cal-day.is-on[data-date="2026-10-09"]')
     wait_step(pg, 5)
 
     # Etapa 5 — horários
     check("Indicador 'Etapa 5 de 5'", "5 de 5" in pg.inner_text("[data-step-count]"))
     times = pg.locator("[data-times] [data-time]")
-    check("Grade de horários com 14 horários (08–12 e 13–16)", times.count() == 14, str(times.count()))
+    check("Sexta: 14 horários (08–12 e 13–16)", times.count() == 14, str(times.count()))
     pg.screenshot(path=str(SHOTS / "m-05-horarios.png"), full_page=False)
     pg.locator('[data-time="09:30"]').click()
     pg.wait_for_timeout(300)
@@ -238,7 +259,7 @@ with sync_playwright() as p:
 
     # Vagas atualizadas
     st, av = api(pub, "GET", "/api/availability")
-    check("Contador atualizado após reserva (84 → 83)", av["total"] == 83, str(av["total"]))
+    check("Contador atualizado após reserva (108 → 107)", av["total"] == 107, str(av["total"]))
     st, ag = api(admin, "GET", "/api/admin/agenda?date=2026-10-09")
     slot = [x for x in ag["slots"] if x["time"] == "09:30"][0]
     check("Agenda do painel: 09:30 com 1/3 ocupada", len(slot["patients"]) == 1 and slot["capacity"] == 3, json.dumps({k: slot[k] for k in slot if k != "patients"}))
@@ -269,12 +290,25 @@ with sync_playwright() as p:
     pg2.type('input[name="whatsapp"]', "92981112222", delay=5)
     pg2.check('input[name="consent_data"]')
     pg2.click('[data-step="3"] [data-next]'); wait_step(pg2, 4)
-    pg2.locator("[data-dates] [data-date]").nth(0).click()
-    pg2.click('[data-step="4"] [data-next]'); wait_step(pg2, 5)
+    pg2.click('.day-chip[data-date="2026-10-09"]'); wait_step(pg2, 5)
     full = pg2.locator('[data-times] button.time', has_text='09:30')
     check("Horário lotado aparece como 'Esgotado' e desabilitado", full.is_disabled() and "Esgotado" in full.inner_text(), full.inner_text())
     full.scroll_into_view_if_needed()
     pg2.screenshot(path=str(SHOTS / "m-07-esgotado.png"))
+
+    # Atualização automática: visitante escolheu 10:00; o painel bloqueia esse horário; a página se atualiza sozinha
+    pg2.locator('[data-time="10:00"]').click()
+    pg2.wait_for_timeout(200)
+    st, ag2 = api(admin, "GET", "/api/admin/agenda?date=2026-10-09")
+    sid = [x for x in ag2["slots"] if x["time"] == "10:00"][0]["id"]
+    api(admin, "PATCH", f"/api/admin/slots/{sid}", {"blocked": True})
+    pg2.evaluate("() => document.dispatchEvent(new Event('visibilitychange'))")
+    pg2.wait_for_timeout(1200)
+    err = pg2.inner_text("[data-form-error]") if pg2.is_visible("[data-form-error]") else ""
+    still = pg2.locator('[data-time="10:00"]').count()
+    check("Atualização automática: horário que deixou de existir é removido e o aviso aparece", still == 0 and "não está mais disponível" in err, f"{still} | {err}")
+    check("Atualização automática: dados preenchidos mantidos", pg2.input_value('input[name="name"]') == "José Antônio")
+    api(admin, "PATCH", f"/api/admin/slots/{sid}", {"blocked": False})
 
     # Avisos discretos (somente autorizados): Mariana autorizou
     st, act = api(pg2ctx, "GET", "/api/activity")
@@ -339,7 +373,7 @@ with sync_playwright() as p:
     amp.screenshot(path=str(SHOTS / "admin-07-mobile.png"), full_page=True)
 
     # ------------------------------------------------------------------ Sem vagas: bloquear as duas datas
-    for d in ["2026-10-09", "2026-10-10"]:
+    for d in ["2026-10-08", "2026-10-09", "2026-10-10"]:
         api(admin, "PUT", f"/api/admin/date-overrides/{d}", {"is_blocked": True, "reason": "Teste sem vagas"})
     nc = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True, locale="pt-BR")
     npg = nc.new_page()

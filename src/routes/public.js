@@ -1,5 +1,6 @@
 import { q } from '../db.js';
 import { config, now } from '../config.js';
+import { todayISO, addDays, formatLongDate } from '../dates.js';
 import { getSettings } from '../settings.js';
 import { publicAvailability } from '../availability.js';
 import { parsePublicBooking, createBooking, confirmationView, hashIp, BookingError } from '../booking.js';
@@ -94,21 +95,34 @@ export function registerPublic(router) {
   });
 
   // Avisos de agendamentos recentes: somente pacientes reais que autorizaram exibir o primeiro nome.
+  // Dados mínimos: primeiro nome, dia relativo e hora. Nada de sobrenome, idade, telefone ou protocolo.
   router.get('/api/activity', async (req, res) => {
     const settings = await getSettings();
     if (!settings.social_proof.enabled) return json(req, res, 200, { items: [] });
     const hours = Math.min(168, Math.max(1, Number(settings.social_proof.max_age_hours) || 48));
     const { rows } = await q(
-      `SELECT p.name, extract(epoch FROM (now() - a.created_at))::int AS seconds
+      `SELECT p.name, a.date, a.time, extract(epoch FROM (now() - a.created_at))::int AS seconds
          FROM appointments a JOIN patients p ON p.id = a.patient_id
         WHERE a.social_proof_ok AND a.status <> 'CANCELADO' AND p.anonymized_at IS NULL
           AND a.created_at > now() - ($1 || ' hours')::interval
         ORDER BY a.created_at DESC LIMIT 12`,
       [String(hours)],
     );
-    json(req, res, 200, {
-      items: rows.map((r) => ({ firstName: r.name.split(' ')[0], minutesAgo: Math.max(1, Math.round(r.seconds / 60)) })),
-    }, { 'cache-control': 'public, max-age=30' });
+    const today = todayISO(now());
+    let items = rows.map((r) => ({
+      firstName: r.name.split(' ')[0],
+      when: activityWhen(r.date, r.time, today),
+      minutesAgo: Math.max(1, Math.round(r.seconds / 60)),
+    }));
+    // Exemplos fictícios apenas fora de produção e só se ligados explicitamente, sempre marcados como demonstração.
+    if (!items.length && !config.isProd && process.env.DEMO_ACTIVITY === 'true') {
+      items = [
+        { firstName: 'Mariana', when: 'para quinta-feira, às 15h', minutesAgo: 3, demo: true },
+        { firstName: 'João', when: 'para sábado, às 9h', minutesAgo: 12, demo: true },
+        { firstName: 'Carla', when: 'para amanhã, às 11h', minutesAgo: 25, demo: true },
+      ];
+    }
+    json(req, res, 200, { items }, { 'cache-control': 'public, max-age=30' });
   });
 
 }
@@ -141,6 +155,17 @@ export function registerShared(router, { role }) {
     await q('SELECT 1');
     json(req, res, 200, { ok: true });
   });
+}
+
+/** "para hoje, às 15h" · "para amanhã, às 11h30" · "para sábado, às 9h" */
+export function activityWhen(date, time, today) {
+  const [h, m] = String(time).split(':');
+  const hour = `${Number(h)}h${m && m !== '00' ? m : ''}`;
+  let day;
+  if (date === today) day = 'hoje';
+  else if (date === addDays(today, 1)) day = 'amanhã';
+  else day = formatLongDate(date).split(',')[0].toLowerCase();
+  return `para ${day}, às ${hour}`;
 }
 
 export { renderNotFound, BookingError };

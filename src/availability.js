@@ -1,5 +1,5 @@
 import { q } from './db.js';
-import { weekdayOf, timeToMinutes, minutesToTime, publicCandidateDates, formatLongDate, todayISO, addDays } from './dates.js';
+import { weekdayOf, timeToMinutes, minutesToTime, publicCandidateDates, formatLongDate, todayISO, addDays, earliestTimeToday, nowTimeHM } from './dates.js';
 import { getSettings } from './settings.js';
 
 const runner = (client) => client || { query: q };
@@ -112,8 +112,13 @@ export async function syncUpcoming(days = 60, client, now = new Date()) {
   }
 }
 
-/** Ocupação de uma data: cada horário com capacidade, ocupação e vagas livres. */
-export async function dayAvailability(date, client) {
+/**
+ * Ocupação de uma data: cada horário com capacidade, ocupação e vagas livres.
+ * Opções (usadas no fluxo público para HOJE):
+ *   minTime    — horários antes deste (agora + antecedência mínima) não são elegíveis;
+ *   sameDayCap — teto adicional de pacientes por horário no mesmo dia (nunca acima da capacidade real).
+ */
+export async function dayAvailability(date, client, { minTime = null, sameDayCap = null } = {}) {
   const db = runner(client);
   const rule = await effectiveRule(date, client);
   if (rule.open) await ensureSlots(date, client);
@@ -129,42 +134,73 @@ export async function dayAvailability(date, client) {
   );
   const totalBooked = rows.reduce((n, r) => n + r.booked, 0);
   const dayLeft = rule.open && rule.daily_limit !== null ? Math.max(0, rule.daily_limit - totalBooked) : Infinity;
+  const cap = sameDayCap === null || sameDayCap === undefined ? null : Number(sameDayCap);
   const slots = rows.map((r) => {
-    const free = !rule.open || r.blocked ? 0 : Math.max(0, r.capacity - r.booked);
-    return { id: r.id, time: r.time, capacity: r.capacity, booked: r.booked, blocked: r.blocked, manual: r.manual, free };
+    const eligible = !minTime || r.time >= minTime;
+    const limit = cap === null ? r.capacity : Math.min(r.capacity, cap);
+    const free = !rule.open || r.blocked || !eligible ? 0 : Math.max(0, limit - r.booked);
+    return { id: r.id, time: r.time, capacity: r.capacity, booked: r.booked, blocked: r.blocked, manual: r.manual, eligible, free };
   });
   const slotFree = slots.reduce((n, s) => n + s.free, 0);
   const remaining = rule.open ? Math.min(slotFree, dayLeft) : 0;
   if (remaining === 0) for (const s of slots) s.free = 0;
+  else if (dayLeft !== Infinity) for (const s of slots) s.free = Math.min(s.free, dayLeft);
   return { date, rule, open: rule.open, slots, booked: totalBooked, remaining };
 }
 
-/** O que o visitante vê: amanhã e o próximo sábado, com horários e vagas reais. */
+/** Regras do fluxo público lidas das configurações (com os padrões). */
+export function publicRules(settings) {
+  const b = settings.booking;
+  return {
+    flags: { today: b.today_enabled !== false, tomorrow: b.tomorrow_enabled !== false, saturday: b.saturday_enabled !== false },
+    leadMinutes: Number.isFinite(Number(b.min_lead_minutes)) ? Number(b.min_lead_minutes) : 60,
+    sameDayCap: b.same_day_cap === null || b.same_day_cap === undefined || b.same_day_cap === '' ? null : Number(b.same_day_cap),
+  };
+}
+
+/** Opções de disponibilidade para uma data candidata (HOJE recebe antecedência mínima e teto do mesmo dia). */
+export function optionsFor(candidate, rules, now) {
+  if (!candidate.isToday) return {};
+  const minTime = earliestTimeToday(now, rules.leadMinutes);
+  return { minTime: minTime || '24:00', sameDayCap: rules.sameDayCap };
+}
+
+/** O que o visitante vê: hoje (horários futuros), amanhã e o próximo sábado, com vagas reais. */
 export async function publicAvailability(now = new Date()) {
   const settings = await getSettings();
   const enabled = !!settings.booking.enabled;
-  const candidates = publicCandidateDates(now);
+  const rules = publicRules(settings);
+  const candidates = publicCandidateDates(now, rules.flags);
   const dates = [];
   for (const c of candidates) {
-    const day = enabled ? await dayAvailability(c.date) : { open: false, remaining: 0, slots: [] };
+    const day = enabled ? await dayAvailability(c.date, null, optionsFor(c, rules, now)) : { open: false, remaining: 0, slots: [] };
+    const times = day.slots
+      // Hoje: horários que já passaram ou sem a antecedência mínima nem aparecem.
+      .filter((s) => !s.blocked && s.eligible !== false)
+      .map((s) => ({ time: s.time, available: s.free > 0, left: s.free, period: timeToMinutes(s.time) < 12 * 60 ? 'manha' : 'tarde' }));
     dates.push({
       date: c.date,
       kind: c.kind,
+      kinds: c.kinds,
+      tag: c.tag,
+      isToday: c.isToday,
       isSaturday: c.isSaturday,
       label: formatLongDate(c.date),
       remaining: day.remaining,
       available: day.remaining > 0,
-      times: day.slots
-        .filter((s) => !s.blocked)
-        .map((s) => ({ time: s.time, available: s.free > 0, period: timeToMinutes(s.time) < 12 * 60 ? 'manha' : 'tarde' })),
+      times,
     });
   }
   const total = dates.reduce((n, d) => n + d.remaining, 0);
+  const todayEntry = dates.find((d) => d.isToday && d.available);
   return {
     enabled,
+    now: { date: todayISO(now), time: nowTimeHM(now) },
+    leadTime: rules.leadMinutes, // minutos de antecedência mínima para hoje
     dates,
     total,
     scarce: total > 0 && total <= Number(settings.booking.scarcity_threshold || 0),
+    today: todayEntry ? { date: todayEntry.date, next: todayEntry.times.filter((t) => t.available).slice(0, 3).map((t) => ({ time: t.time, left: t.left })) } : null,
     waitlist: !!settings.booking.waitlist_enabled,
   };
 }

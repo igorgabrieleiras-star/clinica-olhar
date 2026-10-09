@@ -242,41 +242,112 @@
   function renderSeats() {
     var el = $('[data-seats]');
     var a = availability;
-    var title, count, dot = '';
+    var count, dot;
+    var title = 'AGENDAMENTOS ABERTOS';
     if (!a.enabled || a.total === 0) {
       dot = ' is-off'; title = 'TODAS AS VAGAS FORAM PREENCHIDAS';
       count = a.waitlist ? 'Entre na lista de espera' : 'Novas datas em breve';
     } else {
-      dot = a.scarce ? '' : ' is-calm';
-      title = a.scarce ? 'ÚLTIMAS VAGAS PARA EXAME GRATUITO' : 'VAGAS ABERTAS PARA EXAME GRATUITO';
-      count = a.total === 1 ? 'Resta <b>1</b> vaga disponível' : 'Restam <b>' + a.total + '</b> vagas disponíveis';
+      // "Agendamentos abertos" = o sistema aceita novos agendamentos (não indica atendentes online).
+      dot = ' is-live';
+      count = a.total <= (boot.threshold || 0)
+        ? '<span class="seats-urgent">' + (a.total === 1 ? 'Última vaga disponível' : 'Últimas <b>' + a.total + '</b> vagas disponíveis') + '</span>'
+        : '<b>' + a.total + '</b> vagas disponíveis — agende agora';
     }
     el.innerHTML = '<span class="seats-dot' + dot + '" aria-hidden="true"></span><span class="seats-text"><strong class="seats-title">' + title + '</strong><span class="seats-count">' + count + '</span></span>';
+    var words = dayWords();
+    var lede = $('[data-lede]');
+    if (words) { lede.innerHTML = 'Faça seu cadastro e escolha seu horário para <b></b>.'; lede.querySelector('b').textContent = words; }
+    else lede.textContent = 'Faça seu cadastro e escolha o melhor horário para realizar seu exame de vista gratuito.';
+  }
+  function dayWords() {
+    var w = [];
+    (availability.dates || []).forEach(function (d) {
+      if (!d.available) return;
+      (d.kinds || [d.kind]).forEach(function (k) {
+        var x = k === 'hoje' ? 'hoje' : k === 'amanha' ? 'amanhã' : 'sábado';
+        if (w.indexOf(x) < 0) w.push(x);
+      });
+    });
+    if (!w.length) return '';
+    return w.length === 1 ? w[0] : w.slice(0, -1).join(', ') + ' ou ' + w[w.length - 1];
   }
 
   var CAL = '<svg class="cal" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3.5 9.8h17M8 3v4M16 3v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><rect x="7" y="12.6" width="3.4" height="3" rx=".8" fill="currentColor"/></svg>';
-  var TICK = '<svg class="date-tick" viewBox="0 0 20 20" aria-hidden="true"><path d="M4.5 10.5l3.5 3.5 7.5-8" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  var MONTHS = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+  var WD = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB'];
+  var WD_SHORT = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+  var calMonth = null;
+  function weekday(iso) { return new Date(iso + 'T12:00:00Z').getUTCDay(); }
+  function vagas(n) { return n === 1 ? '1 vaga' : n + ' vagas'; }
 
+  // Calendário: só HOJE / AMANHÃ / SÁBADO com vagas reais ficam clicáveis; o resto aparece desabilitado.
   function renderDates() {
-    var box = $('[data-dates]');
-    var list = availableDates();
-    if (state.date && !dateOption(state.date)) state.date = null;
-    if (state.date && dateOption(state.date) && !dateOption(state.date).available) state.date = null;
-    if (list.length === 1 && !state.date) state.date = list[0].date;
-    $('[data-date-sub]').textContent = list.length > 1 ? 'Escolha uma das datas disponíveis.' : 'Esta é a data com vagas disponíveis.';
-    box.innerHTML = list.map(function (d) {
-      var kind = d.kind === 'amanha' ? 'AMANHÃ' : 'SÁBADO';
-      var left = d.remaining === 1 ? '1 vaga disponível' : d.remaining + ' vagas disponíveis';
-      return '<button type="button" class="date-card" role="radio" aria-checked="' + (state.date === d.date) + '" data-date="' + d.date + '">' +
-        CAL + '<span class="date-kind">' + kind + '</span><span class="date-label">' + d.label + '</span><span class="date-left">' + left + '</span>' + TICK + '</button>';
+    if (state.date && !(dateOption(state.date) || {}).available) { state.date = null; state.time = null; }
+    var a = availability;
+    var today = a.now ? a.now.date : (a.dates[0] || {}).date;
+    var months = [];
+    [today].concat((a.dates || []).map(function (d) { return d.date; })).forEach(function (iso) { var mo = iso.slice(0, 7); if (months.indexOf(mo) < 0) months.push(mo); });
+    months.sort();
+    var firstAvail = availableDates()[0];
+    if (!calMonth || months.indexOf(calMonth) < 0) calMonth = (state.date || (firstAvail && firstAvail.date) || today).slice(0, 7);
+    var y = Number(calMonth.slice(0, 4)), m = Number(calMonth.slice(5, 7));
+    var lead = weekday(calMonth + '-01');
+    var n = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    var idx = months.indexOf(calMonth);
+    var html = '<div class="cal-head">' +
+      '<button type="button" class="cal-nav" data-cal-nav="-1" aria-label="Mês anterior"' + (idx <= 0 ? ' disabled' : '') + '>‹</button>' +
+      '<p class="cal-title">' + MONTHS[m - 1].charAt(0).toUpperCase() + MONTHS[m - 1].slice(1) + ' ' + y + '</p>' +
+      '<button type="button" class="cal-nav" data-cal-nav="1" aria-label="Próximo mês"' + (idx >= months.length - 1 ? ' disabled' : '') + '>›</button></div>' +
+      '<div class="cal-grid cal-wd">' + WD.map(function (w) { return '<span>' + w + '</span>'; }).join('') + '</div><div class="cal-grid">';
+    for (var i = 0; i < lead; i++) html += '<span class="cal-day is-blank" aria-hidden="true"></span>';
+    for (var d = 1; d <= n; d++) {
+      var iso = calMonth + '-' + (d < 10 ? '0' : '') + d;
+      var opt = dateOption(iso);
+      var isToday = iso === today;
+      if (opt && opt.available) {
+        var sel = state.date === iso;
+        html += '<button type="button" class="cal-day is-on' + (isToday ? ' is-today' : '') + (sel ? ' is-sel' : '') + '" data-date="' + iso + '" aria-pressed="' + sel + '" aria-label="' + opt.tag + ': ' + opt.label + ', ' + vagas(opt.remaining) + '">' + d + '</button>';
+      } else {
+        var why = opt ? 'sem vagas' : iso < today ? 'data passada' : 'indisponível';
+        html += '<span class="cal-day is-off' + (iso < today ? ' is-past' : '') + '" aria-disabled="true" title="' + why + '">' + d + '</span>';
+      }
+    }
+    html += '</div>';
+    // Atalhos grandes para as datas permitidas (mais fáceis de tocar que os dias do calendário).
+    var chips = (a.dates || []).map(function (o) {
+      var p = o.date.split('-');
+      var on = o.available;
+      return '<button type="button" class="day-chip' + (state.date === o.date ? ' is-sel' : '') + (o.isToday ? ' is-today' : '') + '"' + (on ? ' data-date="' + o.date + '"' : ' disabled') + '>' +
+        '<span class="dc-tag">' + o.tag + '</span><span class="dc-date">' + WD_SHORT[weekday(o.date)] + ', ' + p[2] + '/' + p[1] + '</span>' +
+        '<span class="dc-left">' + (on ? vagas(o.remaining) : (o.isToday ? 'Sem horários hoje' : 'Sem vagas')) + '</span></button>';
     }).join('');
+    $('[data-calendar]').innerHTML = html + '<div class="day-chips">' + chips + '</div>';
+    renderToday();
+    var picked = $('[data-cal-picked]');
+    var po = dateOption(state.date);
+    picked.hidden = !po;
+    if (po) picked.textContent = po.tag + ' · ' + po.label + ' · ' + vagas(po.remaining);
     save();
+  }
+
+  function renderToday() {
+    var box = $('[data-today]');
+    var t = availability.today;
+    box.hidden = !t;
+    if (!t) return;
+    $('[data-today-slots]').innerHTML = t.next.map(function (x) {
+      return '<li class="' + (x.left === 1 ? 'is-last' : '') + '"><b>' + x.time + '</b><span>' + (x.left === 1 ? 'ÚLTIMA VAGA' : vagas(x.left)) + '</span></li>';
+    }).join('');
   }
 
   function renderTimes() {
     var d = dateOption(state.date);
     var box = $('[data-times]');
-    $('[data-chosen-date]').innerHTML = d ? CAL.replace('class="cal"', '') + '<span>' + d.label + '</span>' : '';
+    $('[data-chosen-date]').innerHTML = d ? CAL.replace('class="cal"', '') + '<span><b>' + d.tag + '</b> · ' + d.label + '</span>' : '';
+    var note = $('[data-lead-note]');
+    note.hidden = !(d && d.isToday);
+    if (d && d.isToday) note.textContent = 'Para hoje, mostramos apenas horários com pelo menos ' + (availability.leadTime >= 60 && availability.leadTime % 60 === 0 ? (availability.leadTime / 60) + (availability.leadTime === 60 ? ' hora' : ' horas') : availability.leadTime + ' minutos') + ' de antecedência.';
     if (!d) { box.innerHTML = ''; return; }
     if (state.time && !(timeOption(state.time) || {}).available) state.time = null;
     var groups = { manha: [], tarde: [] };
@@ -286,8 +357,9 @@
       if (!groups[g[0]].length) return;
       html += '<p class="period">' + g[1] + '</p><div class="time-grid" role="radiogroup" aria-label="Horários da ' + (g[0] === 'manha' ? 'manhã' : 'tarde') + '">';
       groups[g[0]].forEach(function (t) {
-        if (!t.available) html += '<button type="button" class="time" disabled aria-label="' + t.time + ', esgotado">' + t.time + '<small>Esgotado</small></button>';
-        else html += '<button type="button" class="time" role="radio" aria-checked="' + (state.time === t.time) + '" data-time="' + t.time + '">' + t.time + '</button>';
+        if (!t.available) { html += '<button type="button" class="time" disabled aria-label="' + t.time + ', esgotado">' + t.time + '<small>Esgotado</small></button>'; return; }
+        var badge = t.left === 1 ? '<small class="t-last">Última vaga</small>' : d.isToday ? '<small>' + vagas(t.left) + '</small>' : '';
+        html += '<button type="button" class="time' + (t.left === 1 ? ' is-last' : '') + '" role="radio" aria-checked="' + (state.time === t.time) + '" data-time="' + t.time + '" aria-label="' + t.time + ', ' + vagas(t.left) + '">' + t.time + badge + '</button>';
       });
       html += '</div>';
     });
@@ -300,9 +372,11 @@
     var sum = $('[data-summary]');
     var d = dateOption(state.date);
     sum.hidden = !state.time;
+    var t = timeOption(state.time);
+    $('[data-last-seat]').hidden = !(t && t.left === 1);
     if (!state.time) return;
     $('[data-sum="name"]').textContent = state.name + (state.guardian_name ? ' (resp.: ' + state.guardian_name + ')' : '');
-    $('[data-sum="date"]').textContent = d ? d.label : '';
+    $('[data-sum="date"]').textContent = d ? (d.isToday ? 'Hoje, ' : '') + d.label : '';
     $('[data-sum="time"]').textContent = state.time;
     $('[data-sum="whatsapp"]').textContent = maskPhone(state.whatsapp);
   }
@@ -371,14 +445,21 @@
     else if (t.hasAttribute('data-back')) { e.preventDefault(); clearErrors(form); showStep(Math.max(1, current - 1), { back: true }); }
     else if (t.hasAttribute('data-edit')) { e.preventDefault(); showStep(Number(t.getAttribute('data-edit')), { back: true }); }
     else if (t.hasAttribute('data-date')) {
+      // Selecionar a data já carrega os horários dela.
       state.date = t.getAttribute('data-date'); state.time = null; setError('date', '');
-      $$('.date-card', form).forEach(function (c) { c.setAttribute('aria-checked', String(c === t)); });
-      save();
+      save(); renderDates(); goNext(4);
+    } else if (t.hasAttribute('data-today-go')) {
+      e.preventDefault();
+      if (availability.today) { state.date = availability.today.date; state.time = null; setError('date', ''); save(); goNext(4); }
+    } else if (t.hasAttribute('data-cal-nav')) {
+      e.preventDefault();
+      var mo = new Date(calMonth + '-15T12:00:00Z'); mo.setUTCMonth(mo.getUTCMonth() + Number(t.getAttribute('data-cal-nav')));
+      calMonth = mo.toISOString().slice(0, 7); renderDates();
     } else if (t.hasAttribute('data-time')) {
       state.time = t.getAttribute('data-time'); setError('time', '');
       $$('.time[data-time]', form).forEach(function (c) { c.setAttribute('aria-checked', String(c === t)); });
       renderSummary(); save();
-      var fe = $('[data-form-error]'); fe.hidden = true;
+      var fe = $('[data-form-error]'); fe.hidden = true; $('[data-lead-note]').classList.remove('is-alert');
       $('[data-confirm]').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     } else if (t.hasAttribute('data-waitlist-edit')) { e.preventDefault(); showStep(1, { back: true }); }
     else if (t.hasAttribute('data-waitlist-join')) { e.preventDefault(); joinWaitlist(t); }
@@ -443,7 +524,7 @@
         if (res.status === 200 || res.status === 201) return onBooked(res.data.booking);
         idemKey = null; // nova tentativa = novo pedido
         var d = res.data || {};
-        if (d.code === 'SLOT_FULL' || d.code === 'SLOT_UNAVAILABLE') {
+        if (d.code === 'SLOT_FULL' || d.code === 'SLOT_UNAVAILABLE' || d.code === 'SLOT_TOO_SOON') {
           state.time = null;
           return refreshAvailability().then(function () {
             if (!availableDates().length) return showWaitlist();
@@ -451,7 +532,7 @@
             renderTimes(); showFormError(errorMessageFor(d));
           });
         }
-        if (d.code === 'DATE_NOT_ALLOWED' || d.code === 'DATE_UNAVAILABLE') {
+        if (d.code === 'DATE_NOT_ALLOWED' || d.code === 'DATE_UNAVAILABLE' || d.code === 'BOOKING_CLOSED') {
           state.date = null; state.time = null;
           return refreshAvailability().then(function () { if (!availableDates().length) return showWaitlist(); showStep(4); setError('date', errorMessageFor(d)); });
         }
@@ -563,8 +644,10 @@
       if (shown >= MAX || !queue.length) return;
       if (blocked()) { setTimeout(next, 5000); return; }
       var it = queue.shift(); shown++;
-      toast.innerHTML = '<span class="t-dot" aria-hidden="true"></span><span><strong></strong> realizou um agendamento.<small>' + ago(it.minutesAgo) + '</small></span>';
+      toast.innerHTML = '<span class="t-ico" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M5 10.5l3.2 3.2L15 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>' +
+        '<span><strong></strong> agendou <span data-when></span>.<small>' + (it.demo ? 'Demonstração · ' : '') + ago(it.minutesAgo) + '</small></span>';
       toast.querySelector('strong').textContent = it.firstName;
+      toast.querySelector('[data-when]').textContent = it.when || 'um exame';
       toast.hidden = false;
       requestAnimationFrame(function () { toast.classList.add('show'); });
       setTimeout(function () { toast.classList.remove('show'); setTimeout(function () { toast.hidden = true; }, 350); }, 4000);
@@ -585,9 +668,27 @@
     });
   }
 
-  // Atualiza o contador de vagas periodicamente enquanto a página está aberta.
-  setInterval(function () { if (!document.hidden && current !== 5) refreshAvailability().then(function () { if (current === 4) renderDates(); }); }, 45000);
-  document.addEventListener('visibilitychange', function () { if (!document.hidden) refreshAvailability(); });
+  // Atualização automática (relógio do servidor): horários de hoje que perdem a antecedência mínima somem,
+  // vagas e datas são recalculadas, e o que o visitante já preencheu é mantido.
+  function reconcile() {
+    if (current === 4) renderDates();
+    if (current === 5 && !submitting) {
+      var d = dateOption(state.date);
+      if (!d || !d.available) {
+        state.time = null;
+        if (!availableDates().length) return showWaitlist();
+        showStep(4);
+        setError('date', 'Esta data não tem mais horários disponíveis. Escolha outra data.');
+        return;
+      }
+      var had = state.time;
+      renderTimes();
+      if (had && !state.time) showFormError('Este horário não está mais disponível. Escolha outro horário.');
+    }
+  }
+  function autoRefresh() { if (!document.hidden) refreshAvailability().then(reconcile); }
+  setInterval(autoRefresh, 60000);
+  document.addEventListener('visibilitychange', autoRefresh);
 
   // ---------------- Início ----------------
   var done = ss(DONE);

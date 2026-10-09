@@ -45,7 +45,8 @@ test('Página inicial: SEO, segurança e sem Pixel quando desativado', async () 
   assert.equal(r.status, 200);
   assert.match(r.data, /<title>Exame de Vista Grátis \| Clínica Olhar<\/title>/);
   assert.match(r.data, /Solicite seu exame de vista gratuito na Clínica Olhar/);
-  assert.match(r.data, /Restam <b>\d+<\/b> vagas disponíveis/);
+  assert.match(r.data, /AGENDAMENTOS ABERTOS/);
+  assert.match(r.data, /<b>\d+<\/b> vagas disponíveis/);
   assert.match(r.headers.get('content-security-policy'), /default-src 'self'/);
   assert.doesNotMatch(r.headers.get('content-security-policy'), /facebook/);
   assert.equal(r.headers.get('x-frame-options'), 'DENY');
@@ -160,7 +161,7 @@ test('Agenda: bloquear horário e data, configurar vagas', async () => {
   await call('PATCH', `/api/admin/slots/${s.id}`, { capacity: 2 });
   await call('PATCH', `/api/admin/slots/${s.id}`, { blocked: true });
   let pub = (await call('GET', '/api/availability')).data;
-  assert.ok(!pub.dates[1].times.some((t) => t.time === '08:00'), 'horário bloqueado some do site');
+  assert.ok(!pub.dates.find((d) => d.date === '2026-10-10').times.some((t) => t.time === '08:00'), 'horário bloqueado some do site');
   await call('PUT', '/api/admin/date-overrides/2026-10-10', { is_blocked: true, reason: 'Feriado' });
   pub = (await call('GET', '/api/availability')).data;
   assert.equal(pub.dates.find((d) => d.date === '2026-10-10').available, false);

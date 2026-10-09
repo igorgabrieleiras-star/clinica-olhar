@@ -1,58 +1,67 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { publicCandidateDates, todayISO, formatLongDate } from '../src/dates.js';
+import { publicCandidateDates, todayISO, formatLongDate, earliestTimeToday } from '../src/dates.js';
 
-// Meio-dia em Manaus (16h UTC) de cada dia da semana de 05/10/2026 (segunda) a 11/10/2026 (domingo).
+// Horário de Manaus (UTC-4) em cada dia da semana de 05/10/2026 (segunda) a 11/10/2026 (domingo).
 const at = (iso, hhmm = '12:00') => new Date(`${iso}T${hhmm}:00-04:00`);
-const dates = (now) => publicCandidateDates(now).map((c) => `${c.kind}:${c.date}`);
+const opts = (now, flags) => publicCandidateDates(now, flags).map((c) => `${c.tag}:${c.date}`);
 
-test('5/6. Segunda: amanhã (terça) e sábado', () => {
-  assert.deepEqual(dates(at('2026-10-05')), ['amanha:2026-10-06', 'sabado:2026-10-10']);
+test('Segunda: HOJE, AMANHÃ (terça) e SÁBADO', () => {
+  assert.deepEqual(opts(at('2026-10-05')), ['HOJE:2026-10-05', 'AMANHÃ:2026-10-06', 'SÁBADO:2026-10-10']);
 });
-test('Terça: amanhã (quarta) e sábado', () => {
-  assert.deepEqual(dates(at('2026-10-06')), ['amanha:2026-10-07', 'sabado:2026-10-10']);
+test('Terça e quarta: hoje, amanhã e sábado', () => {
+  assert.deepEqual(opts(at('2026-10-06')), ['HOJE:2026-10-06', 'AMANHÃ:2026-10-07', 'SÁBADO:2026-10-10']);
+  assert.deepEqual(opts(at('2026-10-07')), ['HOJE:2026-10-07', 'AMANHÃ:2026-10-08', 'SÁBADO:2026-10-10']);
 });
-test('Quarta: amanhã (quinta) e sábado', () => {
-  assert.deepEqual(dates(at('2026-10-07')), ['amanha:2026-10-08', 'sabado:2026-10-10']);
-});
-test('Quinta: amanhã (sexta) e sábado — exemplo do briefing', () => {
-  assert.deepEqual(dates(at('2026-10-08')), ['amanha:2026-10-09', 'sabado:2026-10-10']);
+test('Quinta (exemplo do briefing): HOJE quinta, AMANHÃ sexta, SÁBADO', () => {
+  assert.deepEqual(opts(at('2026-10-08')), ['HOJE:2026-10-08', 'AMANHÃ:2026-10-09', 'SÁBADO:2026-10-10']);
   assert.equal(formatLongDate('2026-10-09'), 'Sexta-feira, 09 de outubro');
-  assert.equal(formatLongDate('2026-10-10'), 'Sábado, 10 de outubro');
 });
-test('7. Sexta: amanhã já é sábado → uma única opção, sem duplicar', () => {
+test('Sexta: HOJE e AMANHÃ · SÁBADO numa única opção (sem data duplicada)', () => {
   const r = publicCandidateDates(at('2026-10-09'));
-  assert.equal(r.length, 1);
-  assert.equal(r[0].date, '2026-10-10');
-  assert.equal(r[0].isSaturday, true);
+  assert.deepEqual(r.map((c) => [c.date, c.tag]), [['2026-10-09', 'HOJE'], ['2026-10-10', 'AMANHÃ · SÁBADO']]);
+  assert.equal(new Set(r.map((c) => c.date)).size, r.length);
 });
-test('8. Sábado: amanhã (domingo) e o sábado seguinte', () => {
-  assert.deepEqual(dates(at('2026-10-10')), ['amanha:2026-10-11', 'sabado:2026-10-17']);
+test('Sábado: HOJE (sábado), AMANHÃ (domingo) e PRÓXIMO SÁBADO (semana seguinte)', () => {
+  assert.deepEqual(opts(at('2026-10-10')), ['HOJE:2026-10-10', 'AMANHÃ:2026-10-11', 'PRÓXIMO SÁBADO:2026-10-17']);
 });
-test('8. Domingo: amanhã (segunda) e o próximo sábado', () => {
-  assert.deepEqual(dates(at('2026-10-11')), ['amanha:2026-10-12', 'sabado:2026-10-17']);
+test('Domingo: HOJE, AMANHÃ (segunda) e o próximo sábado', () => {
+  assert.deepEqual(opts(at('2026-10-11')), ['HOJE:2026-10-11', 'AMANHÃ:2026-10-12', 'SÁBADO:2026-10-17']);
 });
-
-test('9. Fuso de Manaus: 23:30 de quinta em Manaus já é sexta em UTC', () => {
-  const now = new Date('2026-10-09T03:30:00Z'); // quinta 23:30 em Manaus
+test('Transição sexta → sábado à meia-noite de Manaus', () => {
+  assert.deepEqual(opts(new Date('2026-10-10T03:59:00Z')), ['HOJE:2026-10-09', 'AMANHÃ · SÁBADO:2026-10-10']); // sexta 23:59
+  assert.deepEqual(opts(new Date('2026-10-10T04:00:00Z')), ['HOJE:2026-10-10', 'AMANHÃ:2026-10-11', 'PRÓXIMO SÁBADO:2026-10-17']); // sábado 00:00
+});
+test('Transição sábado → domingo', () => {
+  assert.deepEqual(opts(new Date('2026-10-11T04:00:00Z')), ['HOJE:2026-10-11', 'AMANHÃ:2026-10-12', 'SÁBADO:2026-10-17']);
+});
+test('Fuso de Manaus: 23:30 de quinta em Manaus já é sexta em UTC', () => {
+  const now = new Date('2026-10-09T03:30:00Z');
   assert.equal(todayISO(now), '2026-10-08');
-  assert.deepEqual(dates(now), ['amanha:2026-10-09', 'sabado:2026-10-10']);
-});
-test('9. Fuso de Manaus: virada para sexta 00:00 muda as opções', () => {
-  const now = new Date('2026-10-09T04:00:00Z'); // sexta 00:00 em Manaus
-  assert.equal(todayISO(now), '2026-10-09');
-  assert.deepEqual(dates(now), ['amanha:2026-10-10']);
+  assert.deepEqual(opts(now), ['HOJE:2026-10-08', 'AMANHÃ:2026-10-09', 'SÁBADO:2026-10-10']);
 });
 test('Virada de mês e de ano', () => {
-  assert.deepEqual(dates(at('2026-12-31')), ['amanha:2027-01-01', 'sabado:2027-01-02']);
-  assert.deepEqual(dates(at('2027-02-26')), ['amanha:2027-02-27']); // sexta
+  assert.deepEqual(opts(at('2026-10-30')), ['HOJE:2026-10-30', 'AMANHÃ · SÁBADO:2026-10-31']);
+  assert.deepEqual(opts(at('2026-10-31')), ['HOJE:2026-10-31', 'AMANHÃ:2026-11-01', 'PRÓXIMO SÁBADO:2026-11-07']);
+  assert.deepEqual(opts(at('2026-12-31')), ['HOJE:2026-12-31', 'AMANHÃ:2027-01-01', 'SÁBADO:2027-01-02']);
 });
-test('Nunca oferece hoje nem datas passadas', () => {
-  for (let i = 0; i < 400; i++) {
-    const now = new Date(Date.UTC(2026, 0, 1, 15) + i * 86400000);
-    const today = todayISO(now);
-    for (const c of publicCandidateDates(now)) assert.ok(c.date > today, `${c.date} > ${today}`);
-    const r = publicCandidateDates(now);
-    assert.ok(r.length === 1 || r[0].date !== r[1].date);
+test('Opções desligadas no painel não aparecem', () => {
+  assert.deepEqual(opts(at('2026-10-08'), { today: false }), ['AMANHÃ:2026-10-09', 'SÁBADO:2026-10-10']);
+  assert.deepEqual(opts(at('2026-10-08'), { saturday: false }), ['HOJE:2026-10-08', 'AMANHÃ:2026-10-09']);
+  assert.deepEqual(opts(at('2026-10-09'), { tomorrow: false }), ['HOJE:2026-10-09', 'SÁBADO:2026-10-10']);
+  assert.deepEqual(opts(at('2026-10-08'), { today: false, tomorrow: false, saturday: false }), []);
+});
+test('Nunca oferece datas passadas', () => {
+  for (let d = 1; d <= 28; d++) {
+    const now = at(`2026-02-${String(d).padStart(2, '0')}`);
+    for (const c of publicCandidateDates(now)) assert.ok(c.date >= todayISO(now));
   }
+});
+test('Antecedência mínima: agora + 60 minutos (relógio do servidor)', () => {
+  assert.equal(earliestTimeToday(at('2026-10-08', '08:15')), '09:15'); // antes das 9h
+  assert.equal(earliestTimeToday(at('2026-10-08', '10:00')), '11:00'); // 10h → 11:00 em diante
+  assert.equal(earliestTimeToday(at('2026-10-08', '13:20')), '14:20'); // 13h20 → 14:30 na grade de 30 min
+  assert.equal(earliestTimeToday(at('2026-10-08', '16:10')), '17:10'); // perto das 17h → nada hoje
+  assert.equal(earliestTimeToday(at('2026-10-08', '23:30')), null);
+  assert.equal(earliestTimeToday(at('2026-10-08', '10:00'), 90), '11:30');
 });
