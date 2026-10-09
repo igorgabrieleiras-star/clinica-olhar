@@ -1,0 +1,24 @@
+{
+  "name": "clinica-olhar",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Landing page com agendamento de exame de vista gratuito — Clínica Olhar",
+  "type": "module",
+  "main": "server.js",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "migrate": "node scripts/migrate.js",
+    "create-admin": "node scripts/create-admin.js",
+    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "test:e2e": "python3 test/e2e/run_e2e.py",
+    "db:public-user": "node scripts/create-public-db-user.js",
+    "start:public": "APP_ROLE=public node server.js",
+    "start:admin": "APP_ROLE=admin node server.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  }
+}

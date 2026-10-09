@@ -1,0 +1,59 @@
+# Implantação completa em um servidor (VPS) com Docker: banco + painel privado + site público.
+# 1) cp .env.compose.example .env  e preencha   2) docker compose up -d --build
+# Coloque um proxy HTTPS na frente (ex.: Caddy, ver README): o site no domínio público e o painel no domínio interno.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: olhar
+      POSTGRES_USER: olhar_owner
+      POSTGRES_PASSWORD: ${DB_OWNER_PASSWORD:?defina DB_OWNER_PASSWORD}
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    networks: [interna]          # o banco não é exposto para fora do servidor
+
+  painel:
+    build: .
+    restart: unless-stopped
+    depends_on: [db]
+    environment:
+      APP_ROLE: admin
+      NODE_ENV: production
+      TRUST_PROXY: "true"
+      APP_URL: ${ADMIN_URL:?defina ADMIN_URL}
+      PUBLIC_SITE_URL: ${PUBLIC_URL:?defina PUBLIC_URL}
+      DATABASE_URL: postgres://olhar_owner:${DB_OWNER_PASSWORD}@db:5432/olhar
+      PUBLIC_DB_PASSWORD: ${PUBLIC_DB_PASSWORD:?defina PUBLIC_DB_PASSWORD}
+      SESSION_SECRET: ${ADMIN_SESSION_SECRET:?defina ADMIN_SESSION_SECRET}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD}
+      ADMIN_ALLOWED_IPS: ${ADMIN_ALLOWED_IPS:-}
+      ADMIN_GATE_USER: ${ADMIN_GATE_USER:-}
+      ADMIN_GATE_PASSWORD: ${ADMIN_GATE_PASSWORD:-}
+      ADMIN_CF_ACCESS_TEAM_DOMAIN: ${ADMIN_CF_ACCESS_TEAM_DOMAIN:-}
+      ADMIN_CF_ACCESS_AUD: ${ADMIN_CF_ACCESS_AUD:-}
+    ports: ["127.0.0.1:3001:3000"]   # acessível só pelo proxy local
+    networks: [interna]
+
+  site:
+    build: .
+    restart: unless-stopped
+    depends_on: [db, painel]
+    environment:
+      APP_ROLE: public
+      NODE_ENV: production
+      TRUST_PROXY: "true"
+      APP_URL: ${PUBLIC_URL}
+      DATABASE_URL: postgres://olhar_site:${PUBLIC_DB_PASSWORD}@db:5432/olhar
+      SESSION_SECRET: ${PUBLIC_SESSION_SECRET:?defina PUBLIC_SESSION_SECRET}
+      META_CAPI_ACCESS_TOKEN: ${META_CAPI_ACCESS_TOKEN:-}
+      META_TEST_EVENT_CODE: ${META_TEST_EVENT_CODE:-}
+    ports: ["127.0.0.1:3000:3000"]
+    networks: [interna]
+
+volumes:
+  dbdata:
+
+networks:
+  interna:
