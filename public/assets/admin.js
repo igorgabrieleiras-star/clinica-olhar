@@ -5,7 +5,9 @@
   var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
   var $ = function (s, r) { return (r || document).querySelector(s); };
   var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
-  var MARK = '<svg viewBox="0 0 40 40" aria-hidden="true"><path d="M3 20c4.6-7.4 10.3-11 17-11s12.4 3.6 17 11c-4.6 7.4-10.3 11-17 11S7.6 27.4 3 20Z" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"/><circle cx="20" cy="20" r="6.6" fill="currentColor"/></svg>';
+  // Logomarca oficial (versões com fundo transparente, sempre sobre azul-marinho)
+  var LOGO_SIG = '<img class="logo-sig" src="/brand/logo-assinatura.png" alt="Clínica Olhar" width="113" height="44">';
+  var LOGO_FULL = '<img class="logo-full" src="/brand/logo-completo.png" alt="Clínica Olhar" width="148" height="110">';
   var STATUS = { NOVO: 'Novo', CONFIRMADO: 'Confirmado', CONTATADO: 'Contatado', COMPARECEU: 'Compareceu', NAO_COMPARECEU: 'Não compareceu', CANCELADO: 'Cancelado' };
   var DAYS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
   var me = null;
@@ -57,13 +59,12 @@
   function renderLogin(msg) {
     me = null;
     app.className = '';
-    app.innerHTML = '<div class="auth"><form class="auth-card" id="login" novalidate>' +
-      '<div class="logo">' + MARK + '<span>Clínica Olhar</span></div>' +
+    app.innerHTML = '<div class="auth"><div class="auth-brand">' + LOGO_FULL + '</div><form class="auth-card" id="login" novalidate>' +
       '<h1>Painel administrativo</h1><p>Entre com seu e-mail e senha.</p>' +
       '<label class="f"><span>E-mail</span><input type="email" name="email" autocomplete="username" required></label>' +
       '<label class="f"><span>Senha</span><input type="password" name="password" autocomplete="current-password" required></label>' +
       '<p class="err" id="login-err"' + (msg && msg !== 'Sua sessão expirou. Entre novamente.' ? '' : ' hidden') + '>' + esc(msg || '') + '</p>' +
-      '<button class="btn primary" style="width:100%;min-height:46px">Entrar</button></form></div>';
+      '<button class="btn primary btn-block">Entrar</button></form></div>';
     $('#login').addEventListener('submit', function (e) {
       e.preventDefault();
       var f = e.target, err = $('#login-err');
@@ -77,13 +78,12 @@
 
   function renderChangePassword() {
     app.className = '';
-    app.innerHTML = '<div class="auth"><form class="auth-card" id="pw" novalidate>' +
-      '<div class="logo">' + MARK + '<span>Clínica Olhar</span></div>' +
+    app.innerHTML = '<div class="auth"><div class="auth-brand">' + LOGO_FULL + '</div><form class="auth-card" id="pw" novalidate>' +
       '<h1>Crie uma nova senha</h1><p>Por segurança, troque a senha inicial antes de continuar. Use pelo menos 12 caracteres, com letras e números.</p>' +
       '<label class="f"><span>Senha atual</span><input type="password" name="current" autocomplete="current-password"></label>' +
       '<label class="f"><span>Nova senha</span><input type="password" name="next" autocomplete="new-password" minlength="12"></label>' +
       '<label class="f"><span>Repita a nova senha</span><input type="password" name="again" autocomplete="new-password"></label>' +
-      '<p class="err" id="pw-err" hidden></p><button class="btn primary" style="width:100%;min-height:46px">Salvar nova senha</button></form></div>';
+      '<p class="err" id="pw-err" hidden></p><button class="btn primary btn-block">Salvar nova senha</button></form></div>';
     $('#pw').addEventListener('submit', function (e) {
       e.preventDefault();
       var f = e.target, err = $('#pw-err');
@@ -101,11 +101,32 @@
   ];
   function shell(active, inner) {
     app.className = '';
-    app.innerHTML = '<div class="shell"><aside class="side"><div class="logo">' + MARK + '<span>Clínica Olhar</span></div><nav class="nav">' +
+    var label = (PAGES.filter(function (p) { return p[0] === active; })[0] || PAGES[0])[1];
+    app.innerHTML = '<div class="shell">' +
+      // Barra superior do celular: logomarca + botão do menu
+      '<header class="mbar"><button type="button" class="menu-btn" id="menu-open" aria-controls="side" aria-expanded="false"><span class="menu-ico" aria-hidden="true"></span><span class="sr">Abrir menu</span></button>' +
+      '<span class="mbar-title">' + esc(label) + '</span>' + LOGO_SIG + '</header>' +
+      '<div class="side-bg" id="side-bg" hidden></div>' +
+      '<aside class="side" id="side"><div class="side-top"><div class="logo">' + LOGO_SIG + '</div><button type="button" class="menu-close" id="menu-close" aria-label="Fechar menu">×</button></div><nav class="nav">' +
       PAGES.map(function (p) { return '<a href="#/' + p[0] + '" class="' + (p[0] === active ? 'on' : '') + '">' + p[1] + '</a>'; }).join('') +
       '</nav><div class="side-foot"><div class="who">' + esc(me.email) + '</div><button type="button" id="logout">Sair</button></div></aside><main class="main" id="main">' + inner + '</main></div>';
     $('#logout').addEventListener('click', function () { api('POST', '/api/admin/logout').then(function () { renderLogin(); }); });
+    var side = $('#side'), bg = $('#side-bg'), openBtn = $('#menu-open');
+    function setMenu(open) {
+      side.classList.toggle('open', open); bg.hidden = !open; openBtn.setAttribute('aria-expanded', String(open));
+      document.body.classList.toggle('menu-open', open);
+      if (open) $('.nav a', side).focus();
+    }
+    openBtn.addEventListener('click', function () { setMenu(true); });
+    $('#menu-close').addEventListener('click', function () { setMenu(false); openBtn.focus(); });
+    bg.addEventListener('click', function () { setMenu(false); });
+    $$('.nav a', side).forEach(function (a) { a.addEventListener('click', function () { setMenu(false); }); });
   }
+  // Esc fecha o menu do celular (um único ouvinte para todas as telas)
+  document.addEventListener('keydown', function (e) {
+    var side = document.getElementById('side');
+    if (e.key === 'Escape' && side && side.classList.contains('open')) document.getElementById('menu-close').click();
+  });
   function main() { return $('#main'); }
 
   function route() {

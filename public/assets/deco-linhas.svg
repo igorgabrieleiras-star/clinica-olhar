@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" fill="none" stroke-linecap="round">
+  <!-- Linhas finas paralelas do sistema visual -->
+  <path d="M10 150 150 10" stroke="#0086FF" stroke-width="2"/>
+  <path d="M34 150 150 34" stroke="#00FFFF" stroke-width="2"/>
+  <path d="M58 150 150 58" stroke="#0086FF" stroke-width="2"/>
+</svg>

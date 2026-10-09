@@ -6,13 +6,26 @@ import { formatWhatsapp } from './validate.js';
 const FONT_HREF = 'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap';
 
 // Marca padrão: um olho estilizado. Substituída pela logo enviada no painel, quando houver.
-export const MARK_SVG = `<svg class="mark" viewBox="0 0 40 40" aria-hidden="true" focusable="false"><path d="M3 20c4.6-7.4 10.3-11 17-11s12.4 3.6 17 11c-4.6 7.4-10.3 11-17 11S7.6 27.4 3 20Z" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"/><circle cx="20" cy="20" r="6.6" fill="currentColor"/><circle cx="22.4" cy="17.6" r="1.9" fill="#fff"/></svg>`;
+
+// Logomarca oficial. As versões em /brand/ foram recortadas do arquivo original com fundo transparente
+// (letras brancas) e por isso aparecem sempre sobre superfícies azul-marinho.
+export const LOGO = {
+  assinatura: (h = 46, cls = 'brand-logo') => `<img class="${cls}" src="${assetUrl('/brand/logo-assinatura.png')}" alt="Clínica Olhar" width="${Math.round(h * 602 / 235)}" height="${h}" decoding="async">`,
+  completo: (h = 96, cls = 'brand-full') => `<img class="${cls}" src="${assetUrl('/brand/logo-completo.png')}" alt="Clínica Olhar" width="${Math.round(h * 602 / 448)}" height="${h}" loading="lazy" decoding="async">`,
+};
 
 function brand(settings, logoVersion) {
   const name = esc(settings.clinic.name);
   if (logoVersion) return `<img class="brand-img" src="/media/logo?v=${logoVersion}" alt="${name}" width="180" height="44">`;
-  const [first, ...rest] = settings.clinic.name.split(' ');
-  return `${MARK_SVG}<span class="brand-word"><span class="brand-small">${esc(first)}</span> <span class="brand-big">${esc(rest.join(' ') || first)}</span></span>`;
+  return LOGO.assinatura(46);
+}
+
+/** Ícones de navegador, atalhos e compartilhamento. */
+function iconLinks() {
+  return `<link rel="icon" href="${assetUrl('/favicon.ico')}" sizes="48x48">
+<link rel="icon" href="${assetUrl('/brand/favicon-32.png')}" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="${assetUrl('/brand/apple-touch-icon.png')}">
+<link rel="manifest" href="${assetUrl('/manifest.webmanifest')}">`;
 }
 
 function head({ title, description, extra = '' }) {
@@ -24,14 +37,15 @@ function head({ title, description, extra = '' }) {
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(description)}">
-<meta name="theme-color" content="#14558A">
+<meta name="theme-color" content="#131842">
 <meta property="og:type" content="website">
 <meta property="og:title" content="${esc(title)}">
 <meta property="og:description" content="${esc(description)}">
 <meta property="og:locale" content="pt_BR">
 ${config.appUrl ? `<meta property="og:url" content="${esc(config.appUrl)}/">` : ''}
 ${canonical}
-<link rel="icon" href="${assetUrl('/favicon.svg')}" type="image/svg+xml">
+${iconLinks()}
+${config.appUrl ? `<meta property="og:image" content="${esc(config.appUrl)}/brand/logo-original.png">` : ''}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="${FONT_HREF}">
@@ -47,7 +61,7 @@ function seatsMarkup(av, threshold = 10) {
   // "Agendamentos abertos" indica que o sistema aceita novos agendamentos (não é presença de atendentes).
   const count = av.total <= threshold
     ? `<span class="seats-urgent">${av.total === 1 ? 'Última vaga disponível' : `Últimas <b>${av.total}</b> vagas disponíveis`}</span>`
-    : `<b>${av.total}</b> vagas disponíveis — agende agora`;
+    : `<b>${av.total}</b> vagas disponíveis<span class="seats-cta"> — agende agora</span>`;
   return `<span class="seats-dot is-live" aria-hidden="true"></span><span class="seats-text"><strong class="seats-title">AGENDAMENTOS ABERTOS</strong><span class="seats-count">${count}</span></span>`;
 }
 
@@ -281,7 +295,7 @@ export function renderLanding({ settings, availability, faq, logoVersion }) {
             <h2 id="td" class="done-title" tabindex="-1">SEU AGENDAMENTO FOI REALIZADO!</h2>
             <p class="done-sub">Seu exame de vista gratuito foi agendado com sucesso.</p>
             <div class="ticket">
-              <p class="ticket-head">${MARK_SVG}<span>${esc(s.clinic.name.toUpperCase())}</span></p>
+              <p class="ticket-head">${LOGO.assinatura(30, 'ticket-logo')}</p>
               <dl class="ticket-list">
                 <div><dt>Paciente</dt><dd data-t="name"></dd></div>
                 <div data-t-guardian-row hidden><dt>Responsável</dt><dd data-t="guardian"></dd></div>
@@ -333,7 +347,7 @@ export function renderLanding({ settings, availability, faq, logoVersion }) {
 
 <footer class="foot">
   <div class="wrap foot-inner">
-    <p class="foot-brand">${MARK_SVG}<span>${esc(s.clinic.name)}</span></p>
+    <p class="foot-brand">${LOGO.completo(84)}</p>
     ${s.clinic.address ? `<p>${esc(s.clinic.address)}${s.clinic.maps_url ? ` · <a href="${esc(s.clinic.maps_url)}" target="_blank" rel="noopener">Ver no mapa</a>` : ''}</p>` : ''}
     ${s.clinic.opening_hours_text ? `<p>${esc(s.clinic.opening_hours_text)}</p>` : ''}
     ${wa ? `<p><a href="https://wa.me/55${esc(wa)}" target="_blank" rel="noopener" data-contact>WhatsApp ${esc(formatWhatsapp(wa))}</a></p>` : ''}
@@ -358,7 +372,7 @@ export function renderLanding({ settings, availability, faq, logoVersion }) {
 function simplePage({ settings, title, body }) {
   return `${head({ title, description: settings ? `${settings.clinic.name}` : 'Clínica Olhar' })}
 <body class="page-simple">
-<header class="top"><div class="wrap top-inner"><a class="brand" href="/">${MARK_SVG}<span class="brand-word"><span class="brand-small">Clínica</span> <span class="brand-big">Olhar</span></span></a></div></header>
+<header class="top"><div class="wrap top-inner"><a class="brand" href="/" aria-label="Clínica Olhar — início">${LOGO.assinatura(46)}</a></div></header>
 <main class="wrap doc">${body}</main>
 </body></html>`;
 }
@@ -400,7 +414,8 @@ export function renderAdmin() {
 <meta name="referrer" content="no-referrer">
 <meta name="olhar-public-url" content="${esc(publicUrl)}" data-role="${esc(config.role)}">
 <title>Painel | Clínica Olhar</title>
-<link rel="icon" href="${assetUrl('/favicon.svg')}" type="image/svg+xml">
+${iconLinks()}
+<meta name="theme-color" content="#131842">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="${FONT_HREF}">

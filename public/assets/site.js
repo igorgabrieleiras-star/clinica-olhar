@@ -252,7 +252,7 @@
       dot = ' is-live';
       count = a.total <= (boot.threshold || 0)
         ? '<span class="seats-urgent">' + (a.total === 1 ? 'Última vaga disponível' : 'Últimas <b>' + a.total + '</b> vagas disponíveis') + '</span>'
-        : '<b>' + a.total + '</b> vagas disponíveis — agende agora';
+        : '<b>' + a.total + '</b> vagas disponíveis<span class="seats-cta"> — agende agora</span>';
     }
     el.innerHTML = '<span class="seats-dot' + dot + '" aria-hidden="true"></span><span class="seats-text"><strong class="seats-title">' + title + '</strong><span class="seats-count">' + count + '</span></span>';
     var words = dayWords();

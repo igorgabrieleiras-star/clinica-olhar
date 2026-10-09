@@ -85,6 +85,8 @@ with sync_playwright() as p:
     ap.goto(ADMIN + "/")
     ap.wait_for_selector('input[name="email"]')
     ap.screenshot(path=str(SHOTS / "admin-01-login.png"))
+    lw = ap.evaluate("() => { const i = document.querySelector('.auth .logo-full'); return i ? i.naturalWidth : 0 }")
+    check("Painel: logomarca oficial na tela de login", lw > 0, f"naturalWidth={lw}")
     ap.fill('input[name="email"]', ADMIN_EMAIL)
     ap.fill('input[name="password"]', "senha-errada")
     ap.click('form button.primary')
@@ -316,7 +318,25 @@ with sync_playwright() as p:
     check("Avisos de atividade: só quem autorizou (Mariana sim; Joana/Carlos não)", names == ["Mariana"], str(act)[:200])
 
     # ------------------------------------------------------------------ Responsividade
-    for w in [320, 360, 375, 390, 430, 768, 1280, 1440]:
+    # Marca oficial no site
+    bc = browser.new_context(viewport={"width": 390, "height": 844}, locale="pt-BR")
+    bp = bc.new_page(); block_external(bp); bp.goto(BASE + "/"); bp.wait_for_timeout(400)
+    info = bp.evaluate("""() => ({
+      header: (document.querySelector('.top .brand-logo') || {}).currentSrc || '',
+      headerOk: (document.querySelector('.top .brand-logo') || {}).naturalWidth > 0,
+      footerOk: (document.querySelector('.foot .brand-full') || {}).naturalWidth > 0,
+      favicon: [...document.querySelectorAll('link[rel~=icon], link[rel=apple-touch-icon], link[rel=manifest]')].map(l => l.getAttribute('href')),
+      headerBg: getComputedStyle(document.querySelector('.top')).backgroundColor,
+    })""")
+    check("Marca: logomarca oficial no cabeçalho (sobre marinho) e no rodapé", "/brand/logo-assinatura.png" in info["header"] and info["headerOk"] and info["footerOk"] and info["headerBg"] == "rgb(19, 24, 66)", json.dumps(info)[:200])
+    statuses = {}
+    for path in ["/favicon.ico", "/brand/favicon-32.png", "/brand/apple-touch-icon.png", "/brand/icon-192.png", "/brand/icon-512.png", "/manifest.webmanifest", "/assets/deco-arcos.svg", "/assets/deco-linhas.svg"]:
+        statuses[path] = bc.request.get(BASE + path).status
+    check("Marca: favicon, ícones de atalho, manifest e elementos gráficos publicados", all(v == 200 for v in statuses.values()) and len(info["favicon"]) >= 4, json.dumps(statuses))
+    check("Marca: logomarca provisória removida", bc.request.get(BASE + "/favicon.svg").status == 404 and "<svg class=\"mark\"" not in bp.content())
+    bc.close()
+
+    for w in [320, 360, 375, 390, 414, 430, 768, 1280, 1440]:
         c = browser.new_context(viewport={"width": w, "height": 800 if w < 768 else 900}, locale="pt-BR")
         pp = c.new_page()
         block_external(pp)
@@ -371,6 +391,25 @@ with sync_playwright() as p:
     sw = amp.evaluate("() => document.documentElement.scrollWidth")
     check("Painel no celular sem rolagem horizontal", sw <= 390, f"scrollWidth={sw}")
     amp.screenshot(path=str(SHOTS / "admin-07-mobile.png"), full_page=True)
+    # Menu lateral recolhível
+    x0 = amp.evaluate("() => document.getElementById('side').getBoundingClientRect().right")
+    check("Painel celular: menu recolhido por padrão", x0 <= 0, f"right={x0}")
+    amp.click("#menu-open"); amp.wait_for_timeout(400)
+    x1 = amp.evaluate("() => document.getElementById('side').getBoundingClientRect().left")
+    check("Painel celular: botão abre o menu lateral", x1 >= 0 and amp.is_visible("#side-bg"), f"left={x1}")
+    amp.screenshot(path=str(SHOTS / "admin-08-mobile-menu.png"))
+    amp.click("#side .nav a[href='#/agenda']"); amp.wait_for_timeout(1000)
+    x2 = amp.evaluate("() => document.getElementById('side').getBoundingClientRect().right")
+    check("Painel celular: escolher uma página fecha o menu e navega", x2 <= 0 and "Agenda" in amp.inner_text(".mbar-title"), f"right={x2}")
+    sw2 = amp.evaluate("() => document.documentElement.scrollWidth")
+    check("Painel celular: agenda sem rolagem horizontal", sw2 <= 390, f"scrollWidth={sw2}")
+    amp.screenshot(path=str(SHOTS / "admin-09-mobile-agenda.png"), full_page=True)
+    amp.goto(ADMIN + "/#/painel"); amp.wait_for_timeout(1000)
+    amp.screenshot(path=str(SHOTS / "admin-10-mobile-dashboard.png"), full_page=True)
+    amp.goto(ADMIN + "/#/configuracoes"); amp.wait_for_timeout(1000)
+    sw3 = amp.evaluate("() => document.documentElement.scrollWidth")
+    check("Painel celular: configurações sem campos cortados", sw3 <= 390, f"scrollWidth={sw3}")
+    amp.screenshot(path=str(SHOTS / "admin-11-mobile-config.png"), full_page=True)
 
     # ------------------------------------------------------------------ Sem vagas: bloquear as duas datas
     for d in ["2026-10-08", "2026-10-09", "2026-10-10"]:

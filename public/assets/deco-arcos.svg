@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" fill="none">
+  <!-- Arcos inspirados nas curvas do símbolo da Clínica Olhar (não é a logomarca) -->
+  <path d="M42 170a96 96 0 0 1 128-128" stroke="#0086FF" stroke-width="10" stroke-linecap="round"/>
+  <path d="M210 104a92 92 0 0 1-80 104" stroke="#0086FF" stroke-width="10" stroke-linecap="round"/>
+  <path d="M64 150a68 68 0 0 1 70-82" stroke="#00FFFF" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="196" cy="62" r="7" fill="#0086FF"/>
+  <circle cx="44" cy="196" r="6" fill="#00FFFF"/>
+</svg>
