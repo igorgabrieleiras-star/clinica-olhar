@@ -610,6 +610,79 @@ with sync_playwright() as p:
     check("Remover administrador de teste", st == 200, str(st))
     nctx.close()
 
+    # ------------------------------------------------------------------ Central de Agendamentos (indicadores, gráficos, ações, ao vivo)
+    apc = browser.new_context(viewport={"width": 1366, "height": 900}, locale="pt-BR", storage_state=admin.storage_state())
+    app_ = apc.new_page(); block_external(app_)
+    app_.on("dialog", lambda d: d.accept())
+    app_.goto(ADMIN + "/#/agendamentos"); app_.wait_for_selector(".kpi", timeout=6000)
+    check("Agendamentos: abre em 'Hoje' com título e subtítulo", "on" in app_.get_attribute('#ap-periods [data-p="hoje"]', "class") and "Acompanhe os agendamentos, horários e atendimentos da Clínica Olhar." in app_.inner_text(".ap-head"))
+    app_.click('#ap-periods [data-p="amanha"]'); app_.wait_for_timeout(1500)
+    st, ov = api(admin, "GET", "/api/admin/appointments/overview?period=amanha")
+    kp = app_.inner_text("#ap-kpis")
+    labels = ["TOTAL DE AGENDAMENTOS", "AGENDAMENTOS CONFIRMADOS", "AGUARDANDO CONFIRMAÇÃO", "PACIENTES QUE COMPARECERAM", "NÃO COMPARECERAM", "VAGAS RESTANTES"]
+    check("Agendamentos: 6 indicadores com os números do banco", all(l in kp for l in labels) and app_.inner_text(".kpi:nth-child(1) .kpi-value") == str(ov["counts"]["total"]) and app_.inner_text(".kpi:nth-child(6) .kpi-value") == str(ov["remaining"]), json.dumps(ov["counts"]))
+    c = ov["counts"]
+    st2, lst2 = api(admin, "GET", "/api/admin/appointments?period=amanha")
+    stat = {}
+    for it in lst2["items"]:
+        stat[it["status"]] = stat.get(it["status"], 0) + 1
+    check("Agendamentos: totais conferem com a lista (cada agendamento uma vez)", c["total"] + c["cancelados"] == lst2["total"] and c["confirmados"] == stat.get("CONFIRMADO", 0) and c["aguardando"] == stat.get("NOVO", 0) + stat.get("CONTATADO", 0), f"{c} {stat}")
+    pcts = app_.eval_on_selector_all("#ap-status .dist-val b", "els => els.map(e => parseInt(e.textContent))")
+    check("Situação: 5 status com percentuais somando 100%", len(pcts) == 5 and sum(pcts) == 100, str(pcts))
+    check("Horários mais procurados: barras com destaque do maior", app_.locator("#ap-hours .hbars li").count() >= 1 and (ov["top"] is None or app_.locator("#ap-hours li.is-top").count() == 1), json.dumps(ov["top"]))
+    for evo in ["15", "30"]:
+        app_.click(f'#ap-evo-range [data-evo="{evo}"]'); app_.wait_for_timeout(800)
+    st, ov30 = api(admin, "GET", "/api/admin/appointments/overview?period=amanha&evo=30")
+    check("Evolução: 30 dias com dados reais", len(ov30["evolution"]["days"]) == 30 and (app_.locator("#ap-evo-chart .vb").count() == 30 or "Nenhum agendamento" in app_.inner_text("#ap-evo-chart")))
+    check("Resumo do dia com frases dos dados reais", f"Você possui {c['total']} agendamento" in app_.inner_text("#ap-summary") or "Ainda não há" in app_.inner_text("#ap-summary"), app_.inner_text("#ap-summary")[:120])
+    check("Visualização por horário: vagas ocupadas / capacidade", app_.locator("#ap-slots .sblock").count() >= 1 and "vagas ocupadas" in app_.inner_text("#ap-slots") or "bloqueado" in app_.inner_text("#ap-slots"))
+    app_.screenshot(path=str(SHOTS / "admin-20-agendamentos.png"), full_page=True)
+    # Filtros: painel recolhido, abre pelo botão; busca
+    check("Filtros recolhidos até tocar em FILTROS", not app_.is_visible("#ap-filters"))
+    app_.click("#ap-filters-btn"); app_.wait_for_timeout(200)
+    check("Botão FILTROS abre o painel", app_.is_visible("#f-origin"))
+    app_.fill("#f-q", "Joana"); app_.wait_for_timeout(900)
+    check("Pesquisa por nome", app_.locator("#ap-list tbody tr").count() == 1 and "Joana" in app_.inner_text("#ap-list"))
+    app_.click("#ap-clear"); app_.wait_for_timeout(900)
+    # Ações rápidas: confirmar e cancelar (com confirmação), vaga liberada
+    row = app_.locator('#ap-list tr:has-text("Carlos Lima")')
+    row.locator('[data-status="CONFIRMADO"]').click(); app_.wait_for_timeout(1200)
+    st, l3 = api(admin, "GET", "/api/admin/appointments?period=amanha&q=Carlos")
+    check("Confirmar pelo painel grava no banco", l3["items"][0]["status"] == "CONFIRMADO", l3["items"][0]["status"])
+    before_rem = api(admin, "GET", "/api/admin/appointments/overview?period=amanha")[1]["remaining"]
+    app_.locator('#ap-list tr:has-text("Carlos Lima") [data-status="CANCELADO"]').click(); app_.wait_for_timeout(1500)
+    after = api(admin, "GET", "/api/admin/appointments/overview?period=amanha")[1]
+    check("Cancelar (com confirmação) libera a vaga", after["remaining"] == before_rem + 1, f"{before_rem} → {after['remaining']}")
+    st, audit_l = api(admin, "GET", "/api/admin/audit")
+    check("Alterações de status no histórico administrativo", sum(1 for a in audit_l["items"] if a["action"] == "status") >= 2)
+    r = admin.request.get(ADMIN + "/api/admin/appointments.csv?period=amanha&status=CANCELADO", headers={"x-olhar-csrf": "1"})
+    check("Exportação CSV com filtros", r.status == 200 and "Carlos Lima" in r.text() and "Joana Prado" not in r.text(), str(r.status))
+    # Ao vivo: novo agendamento no site aparece sem recarregar a página
+    t_before = app_.inner_text(".kpi:nth-child(1) .kpi-value")
+    st, avx = api(pub, "GET", "/api/availability")
+    fri = [d for d in avx["dates"] if d["date"] == "2026-10-09"][0]
+    free_t = [t["time"] for t in fri["times"] if t["available"]][0]
+    stb, _ = api(pub, "POST", "/api/bookings", {"name": "Teste Ao Vivo", "age": 33, "whatsapp": "92966660001", "date": "2026-10-09", "time": free_t, "consent_data": True, "elapsed_ms": 9000, "website": "", "idempotency_key": "k-live-1"})
+    for _ in range(40):
+        if app_.inner_text(".kpi:nth-child(1) .kpi-value") != t_before:
+            break
+        app_.wait_for_timeout(250)
+    app_.wait_for_timeout(600)
+    check("Ao vivo: indicador atualiza sozinho com novo agendamento", app_.inner_text(".kpi:nth-child(1) .kpi-value") == str(int(t_before) + 1) and "Teste Ao Vivo" in app_.inner_text("#ap-list") and "Ao vivo" in app_.inner_text("#ap-live"), f"{t_before} → {app_.inner_text('.kpi:nth-child(1) .kpi-value')} ({stb})")
+    check("Ao vivo: horário da atualização exibido", "Dados atualizados às" in app_.inner_text("#ap-live"))
+    apc.close()
+    for w in [320, 360, 375, 390, 430]:
+        mc = browser.new_context(viewport={"width": w, "height": 800}, locale="pt-BR", is_mobile=True, has_touch=True, storage_state=admin.storage_state())
+        mp_ = mc.new_page(); block_external(mp_)
+        mp_.goto(ADMIN + "/#/agendamentos"); mp_.wait_for_selector(".kpi", timeout=6000)
+        mp_.click('#ap-periods [data-p="amanha"]'); mp_.wait_for_timeout(1500)
+        sw = mp_.evaluate("() => document.documentElement.scrollWidth")
+        cols = mp_.evaluate("() => getComputedStyle(document.querySelector('.kpis')).gridTemplateColumns.split(' ').length")
+        check(f"Agendamentos {w}px: sem rolagem horizontal, cards e {cols} coluna(s) de indicadores", sw <= w and (cols == 2 if w >= 360 else cols >= 1) and mp_.is_hidden("#ap-list thead"), f"scrollWidth={sw}")
+        if w == 390:
+            mp_.screenshot(path=str(SHOTS / "admin-21-agendamentos-celular.png"), full_page=True)
+        mc.close()
+
     # ------------------------------------------------------------------ Sem vagas: bloquear as duas datas
     for d in ["2026-10-08", "2026-10-09", "2026-10-10"]:
         api(admin, "PUT", f"/api/admin/date-overrides/{d}", {"is_blocked": True, "reason": "Teste sem vagas"})

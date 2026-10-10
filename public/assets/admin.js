@@ -8,7 +8,7 @@
   // Logomarca oficial (versões com fundo transparente, sempre sobre azul-marinho)
   var LOGO_SIG = '<img class="logo-sig" src="/brand/logo-assinatura.png" alt="Clínica Olhar" width="113" height="44">';
   var LOGO_FULL = '<img class="logo-full" src="/brand/logo-completo.png" alt="Clínica Olhar" width="148" height="110">';
-  var STATUS = { NOVO: 'Novo', CONFIRMADO: 'Confirmado', CONTATADO: 'Contatado', COMPARECEU: 'Compareceu', NAO_COMPARECEU: 'Não compareceu', CANCELADO: 'Cancelado' };
+  var STATUS = { NOVO: 'Agendado',CONFIRMADO: 'Confirmado', CONTATADO: 'Contatado', COMPARECEU: 'Compareceu', NAO_COMPARECEU: 'Não compareceu', CANCELADO: 'Cancelado' };
   var DAYS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
   var me = null;
   // Endereço do site público (o painel roda em outro domínio). Vazio em desenvolvimento = mesmo servidor.
@@ -57,6 +57,7 @@
 
   // ---------- Autenticação ----------
   function renderLogin(msg) {
+    stopLive();
     me = null;
     app.className = '';
     app.innerHTML = '<div class="auth"><div class="auth-brand">' + LOGO_FULL + '</div><form class="auth-card" id="login" novalidate>' +
@@ -139,6 +140,7 @@
     var parts = (location.hash.replace(/^#\/?/, '') || 'painel').split('/');
     if (parts[0] === 'convite') return renderInvite(parts[1] || '');
     if (!me) return renderLogin();
+    startLive();
     var page = parts[0];
     var fn = { painel: pageDashboard, agendamentos: pageAppointments, agenda: pageAgenda, espera: pageWaitlist, configuracoes: pageSettings, administradores: pageAdmins, integracoes: pageIntegrations }[page] || pageDashboard;
     shell(page, '<div class="empty">Carregando…</div>');
@@ -192,80 +194,294 @@
     $('#greet-date').textContent = date.charAt(0).toUpperCase() + date.slice(1);
   }
 
-  // ---------- Agendamentos ----------
-  var filters = { period: '', field: 'exame', status: '', q: '', from: '', to: '', page: 1 };
-  function qs() {
+  // ---------- Agendamentos: central de acompanhamento ----------
+  // Status (mutuamente exclusivos): Agendado/Contatado = aguardando confirmação da equipe · Confirmado ·
+  // Compareceu · Não compareceu · Cancelado. Todos os números vêm do servidor (banco de dados).
+  var AP = { period: 'hoje', from: '', to: '', evo: '7', evo_from: '', evo_to: '', q: '', status: '', time: '', origin: '', campaign: '', page: 1 };
+  var apData = null, apPending = false, apBusy = false, lastList = [];
+  var ICO = {
+    total: '<path d="M7 3v3M17 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/>',
+    ok: '<path d="M20 6 9 17l-5-5"/>',
+    wait: '<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>',
+    came: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/>',
+    miss: '<circle cx="12" cy="12" r="8"/><path d="m9 9 6 6M15 9l-6 6"/>',
+    seats: '<path d="M4 18v-6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v6M4 14h16M7 10V7a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v3"/>',
+  };
+  function ico(name) { return '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + ICO[name] + '</svg>'; }
+  function apQs(extra) {
     var p = new URLSearchParams();
-    Object.keys(filters).forEach(function (k) { if (filters[k]) p.set(k, filters[k]); });
+    ['period', 'from', 'to', 'q', 'status', 'time', 'origin', 'campaign'].forEach(function (k) { if (AP[k]) p.set(k, AP[k]); });
+    if (AP.period !== 'custom') { p.delete('from'); p.delete('to'); }
+    Object.keys(extra || {}).forEach(function (k) { p.set(k, extra[k]); });
     return p.toString();
   }
+  function hourLabel(t) { var h = Number(t.slice(0, 2)), m = t.slice(3, 5); return h + 'h' + (m !== '00' ? m : ''); }
+  function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+  var PERIOD_WORD = { hoje: 'hoje', amanha: 'amanhã', sabado: 'sábado' };
+
   function pageAppointments() {
-    var periods = [['', 'Todos'], ['hoje', 'Hoje'], ['amanha', 'Amanhã'], ['sabado', 'Sábado'], ['7d', 'Últimos 7 dias'], ['mes', 'Este mês'], ['custom', 'Período personalizado']];
-    main().innerHTML = '<div class="page-head"><div><h1>Agendamentos</h1><p id="ap-count"></p></div><a class="btn" id="csv" href="#">Exportar CSV</a></div>' +
-      '<div class="filters"><div class="chips" id="periods">' + periods.map(function (p) { return '<button type="button" class="chip' + (filters.period === p[0] ? ' on' : '') + '" data-p="' + p[0] + '">' + p[1] + '</button>'; }).join('') + '</div>' +
-      '<div class="filters-row" id="custom"' + (filters.period === 'custom' ? '' : ' hidden') + '><select id="f-field"><option value="exame">Data do exame</option><option value="criacao">Data de criação</option></select>' +
-      '<label>de <input type="date" id="f-from" value="' + esc(filters.from) + '"></label><label>até <input type="date" id="f-to" value="' + esc(filters.to) + '"></label></div>' +
-      '<div class="filters-row"><input type="search" id="f-q" placeholder="Buscar por nome, WhatsApp ou protocolo" value="' + esc(filters.q) + '">' +
-      '<select id="f-status"><option value="">Todos os status</option>' + Object.keys(STATUS).map(function (k) { return '<option value="' + k + '"' + (filters.status === k ? ' selected' : '') + '>' + STATUS[k] + '</option>'; }).join('') + '</select></div></div>' +
-      '<div id="ap-list"><div class="empty">Carregando…</div></div>';
-    $('#f-field').value = filters.field;
-    $('#periods').addEventListener('click', function (e) {
+    var periods = [['hoje', 'Hoje'], ['amanha', 'Amanhã'], ['sabado', 'Sábado'], ['7d', 'Últimos 7 dias'], ['mes', 'Este mês'], ['custom', 'Período personalizado']];
+    main().innerHTML = '<div class="page-head ap-head"><div><h1>Agendamentos</h1><p>Acompanhe os agendamentos, horários e atendimentos da Clínica Olhar.</p></div>' +
+      '<p class="live" id="ap-live" aria-live="polite"><span class="live-dot" aria-hidden="true"></span><span id="ap-updated">Carregando…</span></p></div>' +
+      '<div class="period-bar"><div class="chips" id="ap-periods" role="tablist" aria-label="Período">' + periods.map(function (p) { return '<button type="button" class="chip' + (AP.period === p[0] ? ' on' : '') + '" data-p="' + p[0] + '" role="tab" aria-selected="' + (AP.period === p[0]) + '">' + p[1] + '</button>'; }).join('') + '</div>' +
+      '<div class="filters-row" id="ap-custom"' + (AP.period === 'custom' ? '' : ' hidden') + '><label>de <input type="date" id="ap-from" value="' + esc(AP.from) + '"></label><label>até <input type="date" id="ap-to" value="' + esc(AP.to) + '"></label></div></div>' +
+      '<div class="kpis" id="ap-kpis"><div class="empty">Carregando…</div></div>' +
+      '<div class="ap-grid"><section class="panel" id="ap-summary"><h2>RESUMO DO DIA</h2><div class="empty">Carregando…</div></section>' +
+      '<section class="panel" id="ap-status"><h2>SITUAÇÃO DOS AGENDAMENTOS</h2><div class="empty">Carregando…</div></section></div>' +
+      '<div class="ap-grid"><section class="panel" id="ap-hours"><h2>HORÁRIOS MAIS PROCURADOS</h2><p class="hint">Veja os horários com maior volume de agendamentos.</p><div class="empty">Carregando…</div></section>' +
+      '<section class="panel" id="ap-evo"><div class="panel-head"><div><h2>EVOLUÇÃO DOS AGENDAMENTOS</h2><p class="hint">Agendamentos realizados por dia (data do cadastro).</p></div>' +
+      '<div class="chips chips-sm" id="ap-evo-range">' + [['7', '7 dias'], ['15', '15 dias'], ['30', '30 dias'], ['custom', 'Personalizado']].map(function (r) { return '<button type="button" class="chip' + (AP.evo === r[0] ? ' on' : '') + '" data-evo="' + r[0] + '">' + r[1] + '</button>'; }).join('') + '</div></div>' +
+      '<div class="filters-row" id="ap-evo-custom"' + (AP.evo === 'custom' ? '' : ' hidden') + '><label>de <input type="date" id="ap-evo-from" value="' + esc(AP.evo_from) + '"></label><label>até <input type="date" id="ap-evo-to" value="' + esc(AP.evo_to) + '"></label></div>' +
+      '<div id="ap-evo-chart"><div class="empty">Carregando…</div></div></section></div>' +
+      '<section class="panel" id="ap-slots" hidden></section>' +
+      '<section class="panel" id="ap-listwrap"><div class="panel-head"><div><h2 id="ap-list-title">AGENDAMENTOS DE HOJE</h2><p class="hint" id="ap-count"></p></div>' +
+      '<div class="btn-row"><button type="button" class="btn" id="ap-filters-btn" aria-expanded="false" aria-controls="ap-filters">FILTROS<span class="badge" id="ap-fcount" hidden></span></button><a class="btn" id="csv" href="#">Exportar CSV</a></div></div>' +
+      '<input type="search" id="f-q" class="ap-search" placeholder="Buscar por nome, WhatsApp ou protocolo" value="' + esc(AP.q) + '" aria-label="Buscar agendamento">' +
+      '<div class="ap-filters" id="ap-filters"><div class="form-grid">' +
+      '<label class="f"><span>Status</span><select id="f-status"><option value="">Todos</option><option value="AGUARDANDO">Aguardando confirmação</option><option value="CONFIRMADO">Confirmado</option><option value="COMPARECEU">Compareceu</option><option value="NAO_COMPARECEU">Não compareceu</option><option value="CANCELADO">Cancelado</option></select></label>' +
+      '<label class="f"><span>Horário</span><select id="f-time"><option value="">Todos</option></select></label>' +
+      '<label class="f"><span>Origem</span><select id="f-origin"><option value="">Todas</option><option value="meta">Anúncios (Facebook/Instagram)</option><option value="manual">Cadastro manual</option><option value="outros">Outras origens</option></select></label>' +
+      '<label class="f"><span>Campanha</span><select id="f-campaign"><option value="">Todas</option></select></label></div>' +
+      '<button type="button" class="linkbtn" id="ap-clear">Limpar filtros</button></div>' +
+      '<div id="ap-list"><div class="empty">Carregando…</div></div></section>';
+    $('#f-status').value = AP.status; $('#f-origin').value = AP.origin;
+
+    $('#ap-periods').addEventListener('click', function (e) {
       var b = e.target.closest('[data-p]'); if (!b) return;
-      filters.period = b.getAttribute('data-p'); filters.page = 1;
-      $$('#periods .chip').forEach(function (c) { c.classList.toggle('on', c === b); });
-      $('#custom').hidden = filters.period !== 'custom';
-      loadAppointments();
+      AP.period = b.getAttribute('data-p'); AP.page = 1; AP.time = '';
+      $$('#ap-periods .chip').forEach(function (c) { c.classList.toggle('on', c === b); c.setAttribute('aria-selected', String(c === b)); });
+      $('#ap-custom').hidden = AP.period !== 'custom';
+      if (AP.period === 'custom' && !AP.from) return; // espera escolher as datas
+      refreshAll();
     });
+    ['ap-from', 'ap-to'].forEach(function (id) { $('#' + id).addEventListener('change', function () { AP.from = $('#ap-from').value; AP.to = $('#ap-to').value || AP.from; AP.page = 1; refreshAll(); }); });
+    $('#ap-evo-range').addEventListener('click', function (e) {
+      var b = e.target.closest('[data-evo]'); if (!b) return;
+      AP.evo = b.getAttribute('data-evo');
+      $$('#ap-evo-range .chip').forEach(function (c) { c.classList.toggle('on', c === b); });
+      $('#ap-evo-custom').hidden = AP.evo !== 'custom';
+      if (AP.evo !== 'custom' || (AP.evo_from && AP.evo_to)) loadOverview();
+    });
+    ['ap-evo-from', 'ap-evo-to'].forEach(function (id) { $('#' + id).addEventListener('change', function () { AP.evo_from = $('#ap-evo-from').value; AP.evo_to = $('#ap-evo-to').value; if (AP.evo_from && AP.evo_to) loadOverview(); }); });
     var t;
-    $('#f-q').addEventListener('input', function (e) { clearTimeout(t); t = setTimeout(function () { filters.q = e.target.value; filters.page = 1; loadAppointments(); }, 300); });
-    $('#f-status').addEventListener('change', function (e) { filters.status = e.target.value; filters.page = 1; loadAppointments(); });
-    ['f-field', 'f-from', 'f-to'].forEach(function (id) {
-      $('#' + id).addEventListener('change', function () { filters.field = $('#f-field').value; filters.from = $('#f-from').value; filters.to = $('#f-to').value; filters.page = 1; loadAppointments(); });
+    $('#f-q').addEventListener('input', function (e) { clearTimeout(t); t = setTimeout(function () { AP.q = e.target.value.trim(); AP.page = 1; loadList(); }, 300); });
+    [['f-status', 'status'], ['f-time', 'time'], ['f-origin', 'origin'], ['f-campaign', 'campaign']].forEach(function (x) {
+      $('#' + x[0]).addEventListener('change', function (e) { AP[x[1]] = e.target.value; AP.page = 1; loadList(); });
     });
-    $('#csv').addEventListener('click', function (e) { e.preventDefault(); location.href = '/api/admin/appointments.csv?' + qs(); });
-    loadAppointments();
+    $('#ap-clear').addEventListener('click', function () {
+      AP.q = AP.status = AP.time = AP.origin = AP.campaign = ''; AP.page = 1;
+      $('#f-q').value = ''; ['f-status', 'f-time', 'f-origin', 'f-campaign'].forEach(function (id) { $('#' + id).value = ''; });
+      loadList();
+    });
+    $('#ap-filters-btn').addEventListener('click', function () {
+      var box = $('#ap-filters'), open = !box.classList.contains('open');
+      box.classList.toggle('open', open); this.setAttribute('aria-expanded', String(open));
+    });
+    $('#csv').addEventListener('click', function (e) { e.preventDefault(); location.href = '/api/admin/appointments.csv?' + apQs(); });
+    refreshAll();
   }
 
-  var lastList = [];
-  function loadAppointments() {
-    api('GET', '/api/admin/appointments?' + qs()).then(function (d) {
-      lastList = d.items;
-      $('#ap-count').textContent = d.total + (d.total === 1 ? ' agendamento encontrado' : ' agendamentos encontrados');
-      if (!d.items.length) { $('#ap-list').innerHTML = '<div class="panel empty">Nenhum agendamento com esses filtros.</div>'; return; }
-      $('#ap-list').innerHTML = '<div class="table-wrap"><table class="t"><thead><tr><th>Protocolo</th><th>Nome</th><th>Idade</th><th>WhatsApp</th><th>Data do exame</th><th>Horário</th><th>Criado em</th><th>Status</th><th>Origem</th><th></th></tr></thead><tbody>' +
-        d.items.map(function (r) {
-          return '<tr data-id="' + r.id + '"><td class="mono" data-l="Protocolo">' + esc(r.protocol) + '</td>' +
-            '<td data-l="Nome"><b>' + esc(r.name) + '</b>' + (r.guardian ? '<span class="sub">Resp.: ' + esc(r.guardian) + '</span>' : '') + '</td>' +
-            '<td data-l="Idade">' + r.age + '</td>' +
-            '<td data-l="WhatsApp">' + (r.anonymized ? '—' : '<a href="' + wa(r.whatsapp) + '" target="_blank" rel="noopener">' + esc(r.whatsappLabel) + '</a>') + '</td>' +
-            '<td class="mono" data-l="Data">' + fmtDate(r.date) + '</td><td class="mono" data-l="Horário">' + esc(r.time) + '</td>' +
-            '<td data-l="Criado em">' + esc(r.created.split(' ')[0].split('-').reverse().join('/')) + '<span class="sub">' + esc(r.created.split(' ')[1]) + '</span></td>' +
-            '<td data-l="Status"><span class="pill s-' + r.status + '">' + STATUS[r.status] + '</span><div class="quick">' + quickButtons(r) + '</div></td>' +
-            '<td data-l="Origem">' + esc(r.origin) + (r.attribution.campaign ? '<span class="sub">' + esc(r.attribution.campaign) + '</span>' : '') + '</td>' +
-            '<td><button class="btn small" data-open="' + r.id + '">Detalhes</button></td></tr>';
-        }).join('') + '</tbody></table></div>' +
-        '<div class="pager">' + (d.page > 1 ? '<button class="btn small" data-page="' + (d.page - 1) + '">Anterior</button>' : '') + '<span>Página ' + d.page + ' de ' + d.pages + '</span>' + (d.page < d.pages ? '<button class="btn small" data-page="' + (d.page + 1) + '">Próxima</button>' : '') + '</div>';
+  // Recarrega tudo (indicadores, gráficos, horários e lista) sem atrapalhar uma edição em andamento.
+  function refreshAll() {
+    if (!$('#ap-kpis')) return;
+    if ($('.drawer') || $('#modal')) { apPending = true; return; }
+    apPending = false;
+    loadOverview(); loadList();
+  }
+  function loadAppointments() { refreshAll(); }
+
+  function loadOverview() {
+    var extra = { evo: AP.evo };
+    if (AP.evo === 'custom') { extra.evo_from = AP.evo_from; extra.evo_to = AP.evo_to; }
+    api('GET', '/api/admin/appointments/overview?' + apQs(extra)).then(function (d) {
+      if (!$('#ap-kpis')) return;
+      apData = d;
+      renderKpis(d); renderSummary(d); renderStatus(d); renderHours(d); renderEvolution(d); fillFilterOptions(d);
+      var word = PERIOD_WORD[d.period];
+      $('#ap-list-title').textContent = word ? 'AGENDAMENTOS DE ' + word.toUpperCase() : 'AGENDAMENTOS DO PERÍODO';
+      $('#ap-updated').textContent = (live.connected ? 'Ao vivo · ' : '') + 'Dados atualizados às ' + d.updatedAt;
+      $('#ap-live').classList.toggle('on', !!live.connected);
+      if (d.single) loadSlots(d.range.from); else $('#ap-slots').hidden = true;
     }).catch(fail);
   }
-  function quickButtons(r) {
-    var opts = { NOVO: ['CONFIRMADO', 'CONTATADO', 'CANCELADO'], CONFIRMADO: ['COMPARECEU', 'NAO_COMPARECEU', 'CANCELADO'], CONTATADO: ['CONFIRMADO', 'COMPARECEU', 'NAO_COMPARECEU', 'CANCELADO'], COMPARECEU: ['NAO_COMPARECEU'], NAO_COMPARECEU: ['COMPARECEU'], CANCELADO: ['NOVO'] }[r.status] || [];
-    var label = { CONFIRMADO: 'Confirmar', CONTATADO: 'Contatado', COMPARECEU: 'Compareceu', NAO_COMPARECEU: 'Faltou', CANCELADO: 'Cancelar', NOVO: 'Reativar' };
-    return opts.map(function (s) { return '<button class="btn small' + (s === 'CANCELADO' ? ' danger' : '') + '" data-status="' + s + '" data-id="' + r.id + '">' + label[s] + '</button>'; }).join('');
+
+  function renderKpis(d) {
+    var c = d.counts;
+    var card = function (icon, label, value, sub, cls) { return '<div class="kpi' + (cls ? ' ' + cls : '') + '"><span class="kpi-ico">' + ico(icon) + '</span><span class="kpi-label">' + label + '</span><b class="kpi-value">' + value + '</b>' + (sub ? '<small>' + sub + '</small>' : '') + '</div>'; };
+    $('#ap-kpis').innerHTML =
+      card('total', 'TOTAL DE AGENDAMENTOS', c.total, c.cancelados ? plural(c.cancelados, 'cancelado não incluído', 'cancelados não incluídos') : 'no período') +
+      card('ok', 'AGENDAMENTOS CONFIRMADOS', c.confirmados, 'confirmados pela equipe', 'k-blue') +
+      card('wait', 'AGUARDANDO CONFIRMAÇÃO', c.aguardando, 'agendaram, sem confirmação', 'k-amber') +
+      card('came', 'PACIENTES QUE COMPARECERAM', c.compareceram, 'atendimento realizado', 'k-green') +
+      card('miss', 'NÃO COMPARECERAM', c.nao_compareceram, 'faltaram ao horário', 'k-red') +
+      card('seats', 'VAGAS RESTANTES', d.remainingDays ? d.remaining : '—', d.remainingDays ? 'horários livres a partir de agora' : 'período já encerrado', 'k-navy');
   }
-  function setStatus(id, status, after) {
-    if (status === 'CANCELADO' && !confirm('Cancelar este agendamento? A vaga será liberada.')) return;
+
+  function renderSummary(d) {
+    var c = d.counts, s = [];
+    var when = PERIOD_WORD[d.period] ? 'para ' + PERIOD_WORD[d.period] : 'no período (' + d.label + ')';
+    if (!c.total && !c.cancelados) s.push('Ainda não há agendamentos ' + when + '.');
+    else s.push('Você possui ' + plural(c.total, 'agendamento', 'agendamentos') + ' ' + when + '.');
+    if (c.aguardando) s.push(plural(c.aguardando, 'paciente ainda aguarda', 'pacientes ainda aguardam') + ' confirmação.');
+    else if (c.total) s.push('Todos os pacientes do período já foram confirmados ou atendidos.');
+    if (d.top) s.push('O horário mais procurado é ' + hourLabel(d.top.time) + ' (' + plural(d.top.n, 'agendamento', 'agendamentos') + ').');
+    if (d.remainingDays) s.push(d.remaining ? 'Restam ' + plural(d.remaining, 'vaga disponível', 'vagas disponíveis') + ' ' + when + '.' : 'Não há mais vagas livres ' + when + '.');
+    if (c.compareceram) s.push(plural(c.compareceram, 'paciente já compareceu', 'pacientes já compareceram') + '.');
+    if (c.nao_compareceram) s.push(plural(c.nao_compareceram, 'paciente não compareceu', 'pacientes não compareceram') + '.');
+    $('#ap-summary').innerHTML = '<h2>RESUMO DO DIA</h2><ul class="summary">' + s.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul>';
+  }
+
+  // Percentuais pelo método do maior resto: somam exatamente 100%.
+  function percents(values) {
+    var total = values.reduce(function (a, b) { return a + b; }, 0);
+    if (!total) return values.map(function () { return 0; });
+    var raw = values.map(function (v) { return v * 100 / total; });
+    var out = raw.map(Math.floor);
+    var left = 100 - out.reduce(function (a, b) { return a + b; }, 0);
+    raw.map(function (r, i) { return [r - Math.floor(r), i]; }).sort(function (a, b) { return b[0] - a[0]; }).slice(0, left).forEach(function (x) { out[x[1]]++; });
+    return out;
+  }
+  function renderStatus(d) {
+    var c = d.counts;
+    var rows = [['Aguardando confirmação', c.aguardando, 'st-wait'], ['Confirmados', c.confirmados, 'st-ok'], ['Compareceram', c.compareceram, 'st-came'], ['Não compareceram', c.nao_compareceram, 'st-miss'], ['Cancelados', c.cancelados, 'st-cancel']];
+    var all = rows.reduce(function (a, r) { return a + r[1]; }, 0);
+    var pct = percents(rows.map(function (r) { return r[1]; }));
+    $('#ap-status').innerHTML = '<h2>SITUAÇÃO DOS AGENDAMENTOS</h2>' + (all ? '<ul class="dist">' + rows.map(function (r, i) {
+      return '<li class="' + r[2] + '" title="' + esc(r[0]) + ': ' + r[1] + ' (' + pct[i] + '%)"><span class="dist-label"><i aria-hidden="true"></i>' + r[0] + '</span>' +
+        '<span class="dist-bar" aria-hidden="true"><span style="width:' + pct[i] + '%"></span></span><span class="dist-val"><b>' + pct[i] + '%</b> ' + r[1] + '</span></li>';
+    }).join('') + '</ul><p class="hint">' + plural(all, 'agendamento', 'agendamentos') + ' no período, cada um contado uma vez pelo status atual.</p>' : '<p class="empty-sm">Sem agendamentos neste período.</p>');
+  }
+
+  function renderHours(d) {
+    var hrs = d.hours, max = Math.max.apply(null, hrs.map(function (h) { return h.n; }).concat([0]));
+    var box = $('#ap-hours');
+    var head = '<h2>HORÁRIOS MAIS PROCURADOS</h2><p class="hint">Veja os horários com maior volume de agendamentos.</p>';
+    if (!hrs.length) { box.innerHTML = head + '<p class="empty-sm">Nenhum horário de atendimento neste período.</p>'; return; }
+    box.innerHTML = head + (max ? '' : '<p class="empty-sm">Ainda sem agendamentos no período — os horários aparecem abaixo.</p>') +
+      '<ul class="hbars" role="list">' + hrs.map(function (h) {
+        var top = d.top && h.time === d.top.time;
+        var w = max ? Math.max(h.n ? 3 : 0, Math.round(h.n * 100 / max)) : 0;
+        return '<li class="' + (top ? 'is-top' : '') + '" tabindex="0" title="' + h.time + ': ' + plural(h.n, 'agendamento', 'agendamentos') + '" aria-label="' + h.time + ', ' + plural(h.n, 'agendamento', 'agendamentos') + (top ? ', horário mais procurado' : '') + '">' +
+          '<span class="hb-time">' + h.time + '</span><span class="hb-track"><span class="hb-fill" style="width:' + w + '%"></span></span><span class="hb-val">' + h.n + (top ? '<em>mais procurado</em>' : '') + '</span></li>';
+      }).join('') + '</ul>';
+  }
+
+  function renderEvolution(d) {
+    var days = d.evolution.days, max = Math.max.apply(null, days.map(function (x) { return x.n; }).concat([1]));
+    var total = days.reduce(function (a, x) { return a + x.n; }, 0);
+    var best = days.reduce(function (b, x) { return x.n > (b ? b.n : 0) ? x : b; }, null);
+    var step = Math.ceil(days.length / 8);
+    if (!total) { $('#ap-evo-chart').innerHTML = '<p class="empty-sm">Nenhum agendamento realizado entre ' + fmtDate(d.evolution.from).slice(0, 5) + ' e ' + fmtDate(d.evolution.to).slice(0, 5) + '.</p>'; return; }
+    $('#ap-evo-chart').innerHTML = '<p class="evo-meta"><b>' + total + '</b> no período' + (best ? ' · maior movimento em <b>' + fmtDate(best.day).slice(0, 5) + '</b> (' + best.n + ')' : '') + '</p>' +
+      '<div class="vbars" role="img" aria-label="Agendamentos por dia: ' + days.map(function (x) { return fmtDate(x.day).slice(0, 5) + ' ' + x.n; }).join(', ') + '">' + days.map(function (x) {
+        var h = x.n ? Math.max(4, Math.round(x.n * 100 / max)) : 0;
+        return '<div class="vb' + (best && x.day === best.day ? ' is-top' : '') + '" tabindex="0" data-tip="' + fmtDate(x.day).slice(0, 5) + ': ' + plural(x.n, 'agendamento', 'agendamentos') + '"><span style="height:' + h + '%"></span></div>';
+      }).join('') + '</div><div class="vaxis">' + days.map(function (x, i) { return '<span>' + (i % step === 0 || i === days.length - 1 ? fmtDate(x.day).slice(0, 5) : '') + '</span>'; }).join('') + '</div>';
+  }
+
+  function fillFilterOptions(d) {
+    var ts = $('#f-time'), cs = $('#f-campaign');
+    ts.innerHTML = '<option value="">Todos</option>' + d.hours.map(function (h) { return '<option value="' + h.time + '">' + h.time + '</option>'; }).join('');
+    ts.value = AP.time;
+    cs.innerHTML = '<option value="">Todas</option>' + d.campaigns.map(function (c) { return '<option value="' + esc(c) + '">' + esc(c) + '</option>'; }).join('');
+    cs.value = AP.campaign;
+  }
+
+  // Visualização por horário (períodos de um único dia): ocupação real de cada sessão.
+  function loadSlots(date) {
+    api('GET', '/api/admin/agenda?date=' + date).then(function (ag) {
+      var box = $('#ap-slots'); if (!box) return;
+      box.hidden = false;
+      var slots = ag.slots.filter(function (s) { return s.patients.length || !s.blocked; });
+      box.innerHTML = '<div class="panel-head"><div><h2>VISUALIZAÇÃO POR HORÁRIO</h2><p class="hint">' + esc(ag.label) + (ag.open ? ' · ' + ag.booked + ' pacientes · ' + ag.remaining + ' vagas livres' : ' · sem atendimento' + (ag.reason ? ': ' + esc(ag.reason) : '')) + '</p></div>' +
+        '<ul class="legend-sm"><li><i class="lg-free"></i>com vagas</li><li><i class="lg-almost"></i>última vaga</li><li><i class="lg-full"></i>lotado</li></ul></div>' +
+        (slots.length ? '<div class="slots-grid">' + slots.map(function (s) {
+          var cls = s.blocked ? 'is-blocked' : s.booked >= s.capacity ? 'is-full' : s.capacity - s.booked === 1 ? 'is-almost' : 'is-free';
+          return '<div class="sblock ' + cls + '"><div class="sb-head"><b>' + s.time + '</b><span>' + (s.blocked ? 'bloqueado' : s.booked + ' de ' + s.capacity + ' vagas ocupadas') + '</span></div>' +
+            (s.patients.length ? '<ul>' + s.patients.map(function (p) {
+              return '<li><span class="sb-name">' + esc(p.name) + '</span><span class="pill s-' + p.status + '">' + STATUS[p.status] + '</span>' +
+                '<span class="sb-actions">' + quickButtons(p, true) + '<a class="btn small" href="' + wa(p.whatsapp) + '" target="_blank" rel="noopener" aria-label="WhatsApp de ' + esc(p.name) + '">WhatsApp</a><button class="btn small" data-open-protocol="' + esc(p.protocol) + '">Detalhes</button></span></li>';
+            }).join('') + '</ul>' : '<p class="empty-sm">Nenhum paciente neste horário.</p>') + '</div>';
+        }).join('') + '</div>' : '<p class="empty-sm">Nenhum horário de atendimento nesta data.</p>');
+    }).catch(fail);
+  }
+
+  function loadList() {
+    api('GET', '/api/admin/appointments?' + apQs({ sort: 'chrono', page: AP.page })).then(function (d) {
+      if (!$('#ap-list')) return;
+      lastList = d.items;
+      var nf = ['status', 'time', 'origin', 'campaign'].filter(function (k) { return AP[k]; }).length;
+      $('#ap-fcount').hidden = !nf; $('#ap-fcount').textContent = nf;
+      $('#ap-count').textContent = plural(d.total, 'agendamento encontrado', 'agendamentos encontrados') + ' · ordem de atendimento';
+      if (!d.items.length) { $('#ap-list').innerHTML = '<p class="empty-sm">Nenhum agendamento com esses filtros.</p>'; return; }
+      var multiDay = apData && !apData.single;
+      $('#ap-list').innerHTML = '<div class="table-wrap"><table class="t t-ap"><thead><tr><th>Horário</th><th>Paciente</th><th>WhatsApp</th><th>Protocolo</th><th>Status</th><th>Ações</th></tr></thead><tbody>' +
+        d.items.map(function (r) {
+          return '<tr data-id="' + r.id + '"><td class="mono ap-time" data-l="Horário"><b>' + esc(r.time) + '</b>' + (multiDay ? '<span class="sub">' + fmtDate(r.date) + '</span>' : '') + '</td>' +
+            '<td data-l="Paciente" class="ap-name"><div><b>' + esc(r.name) + '</b><span class="sub">' + (r.age != null ? r.age + ' anos · ' : '') + 'cadastro ' + esc(r.created.split(' ')[0].split('-').reverse().join('/').slice(0, 5)) + ' às ' + esc(r.created.split(' ')[1]) + '</span>' + (r.guardian ? '<span class="sub">Resp.: ' + esc(r.guardian) + '</span>' : '') + '</div></td>' +
+            '<td data-l="WhatsApp">' + (r.anonymized ? '—' : esc(r.whatsappLabel)) + '</td>' +
+            '<td class="mono" data-l="Protocolo">' + esc(r.protocol) + '</td>' +
+            '<td data-l="Status"><span class="pill s-' + r.status + '">' + STATUS[r.status] + '</span></td>' +
+            '<td class="ap-actions"><div class="quick">' + quickButtons(r) + '</div><div class="btn-row">' +
+            (r.anonymized ? '' : '<a class="btn small green" href="' + wa(r.whatsapp, 'Olá, ' + r.name.split(' ')[0] + '! Aqui é da Clínica Olhar, sobre o seu exame de vista gratuito (protocolo ' + r.protocol + ') em ' + fmtDate(r.date) + ' às ' + r.time + '.') + '" target="_blank" rel="noopener">WhatsApp</a>') +
+            '<button class="btn small" data-open="' + r.id + '">Ver detalhes</button></div></td></tr>';
+        }).join('') + '</tbody></table></div>' +
+        (d.pages > 1 ? '<div class="pager">' + (d.page > 1 ? '<button class="btn small" data-page="' + (d.page - 1) + '">Anterior</button>' : '') + '<span>Página ' + d.page + ' de ' + d.pages + '</span>' + (d.page < d.pages ? '<button class="btn small" data-page="' + (d.page + 1) + '">Próxima</button>' : '') + '</div>' : '');
+    }).catch(fail);
+  }
+
+  // Ações rápidas conforme o status atual.
+  function quickButtons(r, compact) {
+    var opts = { NOVO: ['CONFIRMADO', 'COMPARECEU', 'NAO_COMPARECEU', 'CANCELADO'], CONTATADO: ['CONFIRMADO', 'COMPARECEU', 'NAO_COMPARECEU', 'CANCELADO'], CONFIRMADO: ['COMPARECEU', 'NAO_COMPARECEU', 'CANCELADO'], COMPARECEU: ['NAO_COMPARECEU'], NAO_COMPARECEU: ['COMPARECEU'], CANCELADO: ['NOVO'] }[r.status] || [];
+    var label = compact
+      ? { CONFIRMADO: 'Confirmar', COMPARECEU: 'Compareceu', NAO_COMPARECEU: 'Faltou', CANCELADO: 'Cancelar', NOVO: 'Reativar' }
+      : { CONFIRMADO: 'CONFIRMAR', COMPARECEU: 'MARCAR COMPARECIMENTO', NAO_COMPARECEU: 'NÃO COMPARECEU', CANCELADO: 'CANCELAR', NOVO: 'REATIVAR' };
+    return opts.map(function (s) { return '<button class="btn small' + (s === 'CANCELADO' ? ' danger' : s === 'CONFIRMADO' ? ' primary' : '') + '" data-status="' + s + '" data-id="' + r.id + '" data-name="' + esc(r.name) + '">' + label[s] + '</button>'; }).join('');
+  }
+  var CONFIRM_MSG = {
+    CANCELADO: 'Cancelar o agendamento de {n}? A vaga será liberada no site.',
+    COMPARECEU: 'Registrar que {n} compareceu ao atendimento?',
+    NAO_COMPARECEU: 'Registrar que {n} NÃO compareceu ao atendimento?',
+    NOVO: 'Reativar o agendamento de {n}? A vaga volta a ser ocupada.',
+  };
+  function setStatus(id, status, after, name) {
+    if (CONFIRM_MSG[status] && !confirm(CONFIRM_MSG[status].replace('{n}', name || 'este paciente'))) return;
     api('PATCH', '/api/admin/appointments/' + id, { status: status }).then(function () { toast('Status atualizado: ' + STATUS[status]); after(); }).catch(fail);
   }
   document.addEventListener('click', function (e) {
     var b = e.target.closest('[data-status]');
-    if (b && $('#ap-list') && $('#ap-list').contains(b)) setStatus(b.getAttribute('data-id'), b.getAttribute('data-status'), loadAppointments);
+    if (b && (($('#ap-list') && $('#ap-list').contains(b)) || ($('#ap-slots') && $('#ap-slots').contains(b)))) setStatus(b.getAttribute('data-id'), b.getAttribute('data-status'), refreshAll, b.getAttribute('data-name'));
     var o = e.target.closest('[data-open]');
     if (o) openDrawer(lastList.filter(function (r) { return String(r.id) === o.getAttribute('data-open'); })[0]);
+    var op = e.target.closest('[data-open-protocol]');
+    if (op) api('GET', '/api/admin/appointments?q=' + encodeURIComponent(op.getAttribute('data-open-protocol'))).then(function (d) { if (d.items[0]) openDrawer(d.items[0]); }).catch(fail);
     var pg = e.target.closest('[data-page]');
-    if (pg) { filters.page = Number(pg.getAttribute('data-page')); loadAppointments(); }
+    if (pg) { AP.page = Number(pg.getAttribute('data-page')); loadList(); }
   });
 
-  function closeDrawer() { $$('.drawer, .drawer-bg').forEach(function (x) { x.remove(); }); }
+  // ---------- Atualização ao vivo (Server-Sent Events, com atualização periódica de reserva) ----------
+  var live = { es: null, connected: false, poll: null };
+  function startLive() {
+    if (live.es || !window.EventSource) return;
+    live.es = new EventSource('/api/admin/stream');
+    live.es.onopen = function () { live.connected = true; setLiveLabel(); };
+    live.es.addEventListener('appointments', function () { refreshAll(); });
+    live.es.addEventListener('logout', function () { stopLive(); });
+    live.es.onerror = function () { live.connected = false; setLiveLabel(); };
+    // Reserva: a cada 60 s, mesmo se o canal ao vivo cair.
+    live.poll = setInterval(function () { if (!live.connected && !document.hidden) refreshAll(); }, 60000);
+  }
+  function stopLive() { if (live.es) live.es.close(); live.es = null; live.connected = false; clearInterval(live.poll); }
+  function setLiveLabel() {
+    var el = $('#ap-live'); if (!el || !apData) return;
+    el.classList.toggle('on', live.connected);
+    $('#ap-updated').textContent = (live.connected ? 'Ao vivo · ' : '') + 'Dados atualizados às ' + apData.updatedAt;
+  }
+
+  function closeDrawer() {
+    $$('.drawer, .drawer-bg').forEach(function (x) { x.remove(); });
+    if (apPending) setTimeout(refreshAll, 0); // aplica a atualização que chegou enquanto a gaveta estava aberta
+  }
   function openDrawer(r) {
     if (!r) return;
     closeDrawer();

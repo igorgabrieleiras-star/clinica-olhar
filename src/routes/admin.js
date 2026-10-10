@@ -3,6 +3,9 @@ import { now, config } from '../config.js';
 import { getSettings, saveSection, DEFAULTS } from '../settings.js';
 import { dayAvailability, publicAvailability, syncDate, syncUpcoming, effectiveRule } from '../availability.js';
 import { setStatus, rescheduleAppointment } from '../booking.js';
+import { subscribeAppointments } from '../live.js';
+import { publicRules, optionsFor } from '../availability.js';
+import { nowTimeHM } from '../dates.js';
 import { login, logout, sessionAdmin, changePassword, SESSION_COOKIE, SESSION_HOURS } from '../auth.js';
 import { todayISO, addDays, publicCandidateDates, isISODate, formatLongDate, timeToMinutes } from '../dates.js';
 import { cleanName, cleanAge, cleanWhatsapp, cleanTime, ValidationError, formatWhatsapp } from '../validate.js';
@@ -84,29 +87,66 @@ function validateHours(r, prefix = '') {
   if (r.lunch_start && timeToMinutes(r.lunch_end) <= timeToMinutes(r.lunch_start)) throw new ValidationError(prefix + 'lunch', 'O fim da pausa precisa ser depois do início.');
 }
 
+// ---------- Período (sempre pela data do exame, no fuso de Manaus) ----------
+/**
+ * Converte o período escolhido no painel em um intervalo de datas do exame.
+ *   hoje · amanha · sabado (o próximo sábado oferecido no site) · 7d (hoje e os 6 dias anteriores)
+ *   mes (do dia 1 ao último dia do mês atual) · custom (de/até, no máximo 366 dias) · '' (todos)
+ */
+export function periodRange(period, params, n = now()) {
+  const today = todayISO(n);
+  if (period === 'hoje') return { from: today, to: today, single: true };
+  if (period === 'amanha') { const d = addDays(today, 1); return { from: d, to: d, single: true }; }
+  if (period === 'sabado') { const d = publicCandidateDates(n).find((c) => c.kinds.includes('sabado')).date; return { from: d, to: d, single: true }; }
+  if (period === '7d') return { from: addDays(today, -6), to: today, single: false };
+  if (period === 'mes') {
+    const first = today.slice(0, 8) + '01';
+    const [y, m] = today.split('-').map(Number);
+    const last = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+    return { from: first, to: last, single: false };
+  }
+  if (period === 'custom') {
+    let from = params.get('from'); let to = params.get('to');
+    if (!isISODate(from || '')) from = null;
+    if (!isISODate(to || '')) to = null;
+    if (!from && !to) return null;
+    from ||= to; to ||= from;
+    if (from > to) [from, to] = [to, from];
+    if (addDays(from, 366) < to) to = addDays(from, 366);
+    return { from, to, single: from === to };
+  }
+  return null;
+}
+
 // ---------- Filtros da lista de agendamentos ----------
+const ORIGIN_SQL = {
+  // Origem do agendamento: anúncios da Meta (UTM ou clique de anúncio), cadastro manual ou demais origens.
+  meta: "(t.fbclid IS NOT NULL OR lower(coalesce(t.utm_source,'')) ~ '(facebook|fb|instagram|ig|meta)')",
+  manual: "a.origin = 'admin'",
+  outros: "(a.origin <> 'admin' AND t.fbclid IS NULL AND lower(coalesce(t.utm_source,'')) !~ '(facebook|fb|instagram|ig|meta)')",
+};
 function buildFilters(params) {
   const where = [];
   const values = [];
   const add = (sql, v) => { values.push(v); where.push(sql.replace('?', '$' + values.length)); };
-  const today = todayISO(now());
   const period = params.get('period') || '';
   const field = params.get('field') === 'criacao' ? 'criacao' : 'exame';
   const createdDay = "(a.created_at AT TIME ZONE 'America/Manaus')::date";
-  if (period === 'hoje') add('a.date = ?', today);
-  else if (period === 'amanha') add('a.date = ?', addDays(today, 1));
-  else if (period === 'sabado') add('a.date = ?', publicCandidateDates(now()).find((c) => c.kinds.includes('sabado')).date);
-  else if (period === '7d') add(`${createdDay} >= ?`, addDays(today, -6));
-  else if (period === 'mes') add(`${createdDay} >= ?`, today.slice(0, 8) + '01');
-  else if (period === 'custom') {
+  const range = periodRange(period, params);
+  if (range) {
     const col = field === 'criacao' ? createdDay : 'a.date';
-    const from = params.get('from');
-    const to = params.get('to');
-    if (from && isISODate(from)) add(`${col} >= ?`, from);
-    if (to && isISODate(to)) add(`${col} <= ?`, to);
+    add(`${col} >= ?`, range.from);
+    add(`${col} <= ?`, range.to);
   }
   const status = params.get('status');
-  if (status && STATUSES.includes(status)) add('a.status = ?', status);
+  if (status === 'AGUARDANDO') where.push("a.status IN ('NOVO','CONTATADO')");
+  else if (status && STATUSES.includes(status)) add('a.status = ?', status);
+  const time = params.get('time');
+  if (time && /^\d{2}:\d{2}$/.test(time)) add('a.time = ?', time);
+  const origin = params.get('origin');
+  if (ORIGIN_SQL[origin]) where.push(ORIGIN_SQL[origin]);
+  const campaign = (params.get('campaign') || '').trim().slice(0, 200);
+  if (campaign) add('t.utm_campaign = ?', campaign);
   const term = (params.get('q') || '').trim().slice(0, 80);
   if (term) {
     const digits = term.replace(/\D/g, '');
@@ -317,6 +357,99 @@ export function registerAdmin(router) {
     });
   });
 
+  // ----- Agendamentos: central de acompanhamento (indicadores, gráficos e resumo) -----
+  // Definições (mutuamente exclusivas, pelo status atual de cada agendamento):
+  //   aguardando = NOVO ou CONTATADO (paciente agendou; equipe ainda não confirmou)
+  //   confirmados = CONFIRMADO · compareceram = COMPARECEU · nao_compareceram = NAO_COMPARECEU · cancelados = CANCELADO
+  //   total = todos os agendamentos do período, exceto cancelados (cada agendamento conta uma única vez)
+  router.get('/api/admin/appointments/overview', async (req, res) => {
+    await requireAdmin(req);
+    const params = new URL(req.url, 'http://x').searchParams;
+    const n = now();
+    const today = todayISO(n);
+    const period = params.get('period') || 'hoje';
+    const range = periodRange(period, params, n) || periodRange('hoje', params, n);
+
+    const { rows: byStatus } = await q('SELECT status, count(*) AS n FROM appointments WHERE date BETWEEN $1 AND $2 GROUP BY status', [range.from, range.to]);
+    const st = Object.fromEntries(byStatus.map((r) => [r.status, r.n]));
+    const counts = {
+      aguardando: (st.NOVO || 0) + (st.CONTATADO || 0),
+      confirmados: st.CONFIRMADO || 0,
+      compareceram: st.COMPARECEU || 0,
+      nao_compareceram: st.NAO_COMPARECEU || 0,
+      cancelados: st.CANCELADO || 0,
+    };
+    counts.total = counts.aguardando + counts.confirmados + counts.compareceram + counts.nao_compareceram;
+
+    // Horários mais procurados: todos os horários da agenda no período (mesmo sem agendamentos) e os agendados.
+    const { rows: hours } = await q(
+      `SELECT t.time, count(a.id) FILTER (WHERE a.status <> 'CANCELADO') AS n
+         FROM (SELECT time FROM slots WHERE date BETWEEN $1 AND $2 UNION SELECT time FROM appointments WHERE date BETWEEN $1 AND $2) t
+         LEFT JOIN appointments a ON a.time = t.time AND a.date BETWEEN $1 AND $2
+        GROUP BY t.time ORDER BY t.time`,
+      [range.from, range.to],
+    );
+    const top = hours.reduce((best, h) => (h.n > 0 && (!best || h.n > best.n) ? h : best), null);
+
+    // Vagas restantes: horários livres da agenda nas datas do período a partir de hoje
+    // (hoje, só horários que ainda não começaram). Datas e horários bloqueados não contam.
+    let remaining = 0;
+    let remainingDays = 0;
+    const start = range.from > today ? range.from : today;
+    if (start <= range.to) {
+      let d = start;
+      for (let i = 0; d <= range.to && i < 62; i++, d = addDays(d, 1)) {
+        const day = await dayAvailability(d, null, d === today ? { minTime: nowTimeHM(n) } : {});
+        remaining += day.remaining;
+        remainingDays++;
+      }
+    }
+
+    // Evolução: agendamentos realizados por dia (data do cadastro), sem contar cancelados.
+    const evoDays = [7, 15, 30].includes(Number(params.get('evo'))) ? Number(params.get('evo')) : 7;
+    let evoFrom = addDays(today, -(evoDays - 1));
+    let evoTo = today;
+    if (params.get('evo') === 'custom' && isISODate(params.get('evo_from') || '') && isISODate(params.get('evo_to') || '')) {
+      evoFrom = params.get('evo_from'); evoTo = params.get('evo_to');
+      if (evoFrom > evoTo) [evoFrom, evoTo] = [evoTo, evoFrom];
+      if (addDays(evoFrom, 92) < evoTo) evoFrom = addDays(evoTo, -92);
+    }
+    const { rows: evolution } = await q(
+      `SELECT d::date::text AS day, count(a.id) FILTER (WHERE a.status <> 'CANCELADO') AS n
+         FROM generate_series($1::date, $2::date, interval '1 day') d
+         LEFT JOIN appointments a ON (a.created_at AT TIME ZONE 'America/Manaus')::date = d::date
+        GROUP BY d ORDER BY d`,
+      [evoFrom, evoTo],
+    );
+    const { rows: campaigns } = await q(
+      `SELECT DISTINCT t.utm_campaign AS c FROM attributions t JOIN appointments a ON a.id = t.appointment_id
+        WHERE t.utm_campaign IS NOT NULL AND t.utm_campaign <> '' AND a.created_at > now() - interval '180 days' ORDER BY 1 LIMIT 50`,
+    );
+    json(req, res, 200, {
+      period, range, today, single: range.single,
+      label: range.single ? formatLongDate(range.from) : `${range.from.split('-').reverse().join('/')} a ${range.to.split('-').reverse().join('/')}`,
+      counts, remaining, remainingDays,
+      hours, top,
+      evolution: { from: evoFrom, to: evoTo, days: evolution },
+      campaigns: campaigns.map((r) => r.c),
+      updatedAt: nowTimeHM(n),
+    });
+  });
+
+  // Aviso ao vivo (Server-Sent Events): o painel recarrega os números quando um agendamento entra ou muda.
+  router.get('/api/admin/stream', async (req, res) => {
+    const admin = await requireAdmin(req);
+    res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no', connection: 'keep-alive' });
+    res.write('retry: 5000\n\n: conectado\n\n');
+    const unsubscribe = subscribeAppointments(() => res.write('event: appointments\ndata: changed\n\n'));
+    const ping = setInterval(() => res.write(': ping\n\n'), 25000);
+    const recheck = setInterval(async () => {
+      // Sessão encerrada ou conta desativada: o canal fecha.
+      if (!(await sessionAdmin(admin.token).catch(() => null))) { res.write('event: logout\ndata: 1\n\n'); res.end(); }
+    }, 60000);
+    req.on('close', () => { clearInterval(ping); clearInterval(recheck); unsubscribe(); });
+  });
+
   // ----- Agendamentos -----
   router.get('/api/admin/appointments', async (req, res) => {
     await requireAdmin(req);
@@ -324,8 +457,9 @@ export function registerAdmin(router) {
     const { where, values } = buildFilters(params);
     const page = Math.max(1, Number(params.get('page')) || 1);
     const per = 50;
-    const { rows: [{ total }] } = await q(`SELECT count(*) AS total FROM appointments a JOIN patients p ON p.id = a.patient_id ${where}`, values);
-    const { rows } = await q(`${LIST_SQL} ${where} ORDER BY a.date DESC, a.time ASC, a.id DESC LIMIT ${per} OFFSET ${(page - 1) * per}`, values);
+    const { rows: [{ total }] } = await q(`SELECT count(*) AS total FROM appointments a JOIN patients p ON p.id = a.patient_id LEFT JOIN attributions t ON t.appointment_id = a.id ${where}`, values);
+    const order = params.get('sort') === 'chrono' ? 'a.date ASC, a.time ASC, a.id ASC' : 'a.date DESC, a.time ASC, a.id DESC';
+    const { rows } = await q(`${LIST_SQL} ${where} ORDER BY ${order} LIMIT ${per} OFFSET ${(page - 1) * per}`, values);
     json(req, res, 200, { total, page, pages: Math.max(1, Math.ceil(total / per)), items: rows.map(rowView) });
   });
 
