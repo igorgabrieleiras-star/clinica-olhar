@@ -188,6 +188,9 @@ test('Banco: usuário do site público tem apenas as permissões mínimas', asyn
     await site.query('SELECT id, name, whatsapp FROM patients LIMIT 1');
     await site.query("SELECT nextval('protocol_seq')");
     await site.query(`INSERT INTO service_status (service, info) VALUES ('public', '{}') ON CONFLICT (service) DO UPDATE SET info = EXCLUDED.info`);
+    // Funil interno: o site grava etapas (sem duplicar), mas não lê os dados
+    await site.query(`INSERT INTO funnel_events (session_id, event) VALUES ('2b000b6c-ba20-40d8-ae2a-417a94773d7d', 'landing') ON CONFLICT (session_id, event) DO NOTHING`);
+    await site.query(`INSERT INTO funnel_events (session_id, event) VALUES ('2b000b6c-ba20-40d8-ae2a-417a94773d7d', 'landing') ON CONFLICT (session_id, event) DO NOTHING`);
     await site.query("SELECT pg_notify('olhar_settings', 'x')");
     // Negado (dados e operações administrativas)
     await denied('SELECT * FROM admins');
@@ -195,6 +198,7 @@ test('Banco: usuário do site público tem apenas as permissões mínimas', asyn
     await denied('SELECT * FROM admin_invites');
     await denied('SELECT * FROM integration_security');
     await denied('SELECT * FROM funnel_events');
+    await denied('SELECT utm_campaign FROM funnel_events');
     await denied('SELECT * FROM audit_log');
     await denied('SELECT * FROM consents');
     await denied('SELECT * FROM attributions');
