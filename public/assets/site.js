@@ -46,6 +46,24 @@
     }
   })();
 
+  // ---------------- Funil interno (automático, anônimo, sem cookies) ----------------
+  // Mede as etapas do agendamento para a própria clínica desde a entrada na página, sem clique e sem depender
+  // dos cookies de anúncios. Envia só a etapa e a origem da visita (UTM) — nunca nome, idade ou WhatsApp.
+  var funnelSid = ss('olhar_fsid');
+  if (!funnelSid) { funnelSid = uuid(); ss('olhar_fsid', funnelSid); }
+  var funnelSent = {};
+  function funnel(event) {
+    if (funnelSent[event]) return;
+    funnelSent[event] = true;
+    var a = ss('olhar_attr') || {};
+    var body = JSON.stringify({ sid: funnelSid, event: event, origin: {
+      utm_source: a.utm_source, utm_medium: a.utm_medium, utm_campaign: a.utm_campaign, utm_content: a.utm_content, utm_term: a.utm_term,
+      from_ad: !!a.fbclid, referrer: a.referrer || null,
+    } });
+    try { fetch('/api/funnel', { method: 'POST', headers: { 'content-type': 'application/json' }, body: body, keepalive: true, credentials: 'same-origin' }).catch(function () {}); } catch (e) { /* medição nunca atrapalha o cadastro */ }
+  }
+  funnel('landing');
+
   // ---------------- Meta Pixel (com consentimento) ----------------
   var meta = boot.meta;
   var pixelLoaded = false;
@@ -402,6 +420,8 @@
     var num = typeof step === 'number' ? step : null;
     $('[data-head]').hidden = !num;
     if (num) {
+      var stepEvent = { 2: 'age_step', 3: 'whatsapp_step', 4: 'date_step', 5: 'time_step' }[num];
+      if (stepEvent) funnel(stepEvent);
       $('[data-step-count]').textContent = 'Etapa ' + num + ' de 5';
       $$('.progress li').forEach(function (li, i) { li.classList.toggle('on', i < num); });
       state.step = num; save();
@@ -487,6 +507,7 @@
     state.age = e.target.value; toggleGuardian();
   });
   form.addEventListener('input', function (e) {
+    if (e.target.name === 'name' && e.target.value) funnel('name_started');
     if (e.target.name) setError(e.target.name, '');
   });
 
@@ -563,7 +584,7 @@
       whatsapp: state.whatsapp, date: state.date, time: state.time,
       consent_data: !!state.consent_data, consent_marketing: !!state.consent_marketing, consent_social: !!state.consent_social,
       ads_consent: adsConsent(), idempotency_key: idemKey, elapsed_ms: Date.now() - startedAt,
-      website: form.elements.website.value, attribution: ss('olhar_attr') || {},
+      website: form.elements.website.value, attribution: ss('olhar_attr') || {}, funnel_sid: funnelSid,
     };
     fetch('/api/bookings', { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(payload) })
       .then(function (r) { return r.json().catch(function () { return {}; }).then(function (data) { return { status: r.status, data: data }; }); })

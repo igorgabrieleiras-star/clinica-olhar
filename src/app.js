@@ -101,6 +101,8 @@ export async function runRetention() {
     [days],
   );
   await q('DELETE FROM admin_sessions WHERE expires_at < now()');
+  // Funil interno: dados agregados de navegação ficam no máximo 180 dias.
+  await q("DELETE FROM funnel_events WHERE created_at < now() - interval '180 days'");
   if (rowCount || w) console.log(`[retenção] anonimizados: ${rowCount} pacientes, ${w} da lista de espera`);
   return { patients: rowCount, waitlist: w };
 }

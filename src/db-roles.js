@@ -39,8 +39,10 @@ export function publicGrantStatements(role) {
     `GRANT UPDATE (status, response) ON meta_events TO ${r}`,
     // Estado do próprio serviço (token da API de Conversões configurado, último início)
     `GRANT SELECT, INSERT, UPDATE ON service_status TO ${r}`,
+    // Funil interno anônimo: o site só registra etapas (nunca lê de volta)
+    `GRANT INSERT ON funnel_events TO ${r}`,
     // Sequências usadas nos INSERTs acima (protocolo e IDs)
-    `GRANT USAGE ON SEQUENCE protocol_seq, patients_id_seq, appointments_id_seq, slots_id_seq, consents_id_seq, waitlist_id_seq, meta_events_id_seq TO ${r}`,
+    `GRANT USAGE ON SEQUENCE protocol_seq, patients_id_seq, appointments_id_seq, slots_id_seq, consents_id_seq, waitlist_id_seq, meta_events_id_seq, funnel_events_id_seq TO ${r}`,
   ];
 }
 

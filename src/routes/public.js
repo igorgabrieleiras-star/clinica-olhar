@@ -8,6 +8,7 @@ import { sendConversion } from '../meta.js';
 import { cleanName, cleanWhatsapp, cleanAge, ValidationError } from '../validate.js';
 import { json, html, readJson, rateLimit, clientIp, parseCookies, HttpError, send } from '../http.js';
 import { renderLanding, renderPrivacy, renderNotFound, dayWordList } from '../views.js';
+import { CLIENT_EVENTS, recordFunnel, funnelOrigin, deviceOf, validSession } from '../funnel.js';
 
 async function loadFaq(settings) {
   const { rows } = await q('SELECT question, answer FROM faq WHERE active ORDER BY position, id');
@@ -55,6 +56,11 @@ export function registerPublic(router) {
     if (!phoneLimit.ok) throw new HttpError(429, 'Este número já fez vários agendamentos hoje. Fale com a clínica pelo WhatsApp.', 'RATE_LIMIT');
 
     const booking = await createBooking(input, { now: now(), ipHash: hashIp(ip, config.sessionSecret) });
+    // Funil interno: todo agendamento confirmado é registrado, independentemente de cookies ou da Meta.
+    if (!booking.replay) {
+      recordFunnel({ sessionId: body.funnel_sid, event: 'booking_confirmed', origin: funnelOrigin(input.attribution), device: deviceOf(req.headers['user-agent']), appointmentId: booking.id })
+        .catch((err) => console.error('[funil] falha ao registrar agendamento:', err.message));
+    }
     const fresh = await getSettings();
     json(req, res, booking.replay ? 200 : 201, { ok: true, replay: booking.replay, booking: confirmationView(booking, fresh) });
 
@@ -70,6 +76,16 @@ export function registerPublic(router) {
         adsConsent: input.adsConsent,
       }).catch((err) => console.error('[meta] falha no envio:', err.message));
     }
+  });
+
+  // Funil interno (etapas do formulário). Sem cookies e sem dados pessoais; só aceita etapas conhecidas.
+  router.post('/api/funnel', async (req, res) => {
+    if (!rateLimit('funnel:' + clientIp(req), 300, 60 * 60 * 1000).ok) return send(req, res, 204, '');
+    const body = await readJson(req, 4096);
+    if (!CLIENT_EVENTS.includes(body.event)) throw new HttpError(422, 'Etapa desconhecida.', 'INVALID');
+    if (!validSession(body.sid)) throw new HttpError(422, 'Sessão inválida.', 'INVALID');
+    await recordFunnel({ sessionId: body.sid, event: body.event, origin: funnelOrigin(body.origin), device: deviceOf(req.headers['user-agent']) });
+    send(req, res, 204, '');
   });
 
   router.post('/api/waitlist', async (req, res) => {

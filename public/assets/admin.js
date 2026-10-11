@@ -233,6 +233,7 @@
       '<div class="chips chips-sm" id="ap-evo-range">' + [['7', '7 dias'], ['15', '15 dias'], ['30', '30 dias'], ['custom', 'Personalizado']].map(function (r) { return '<button type="button" class="chip' + (AP.evo === r[0] ? ' on' : '') + '" data-evo="' + r[0] + '">' + r[1] + '</button>'; }).join('') + '</div></div>' +
       '<div class="filters-row" id="ap-evo-custom"' + (AP.evo === 'custom' ? '' : ' hidden') + '><label>de <input type="date" id="ap-evo-from" value="' + esc(AP.evo_from) + '"></label><label>até <input type="date" id="ap-evo-to" value="' + esc(AP.evo_to) + '"></label></div>' +
       '<div id="ap-evo-chart"><div class="empty">Carregando…</div></div></section></div>' +
+      '<section class="panel" id="ap-funnel"><h2>FUNIL DO SITE</h2><div class="empty">Carregando…</div></section>' +
       '<section class="panel" id="ap-slots" hidden></section>' +
       '<section class="panel" id="ap-listwrap"><div class="panel-head"><div><h2 id="ap-list-title">AGENDAMENTOS DE HOJE</h2><p class="hint" id="ap-count"></p></div>' +
       '<div class="btn-row"><button type="button" class="btn" id="ap-filters-btn" aria-expanded="false" aria-controls="ap-filters">FILTROS<span class="badge" id="ap-fcount" hidden></span></button><a class="btn" id="csv" href="#">Exportar CSV</a></div></div>' +
@@ -296,7 +297,7 @@
     api('GET', '/api/admin/appointments/overview?' + apQs(extra)).then(function (d) {
       if (!$('#ap-kpis')) return;
       apData = d;
-      renderKpis(d); renderSummary(d); renderStatus(d); renderHours(d); renderEvolution(d); fillFilterOptions(d);
+      renderKpis(d); renderSummary(d); renderStatus(d); renderHours(d); renderEvolution(d); renderFunnel(d); fillFilterOptions(d);
       var word = PERIOD_WORD[d.period];
       $('#ap-list-title').textContent = word ? 'AGENDAMENTOS DE ' + word.toUpperCase() : 'AGENDAMENTOS DO PERÍODO';
       $('#ap-updated').textContent = (live.connected ? 'Ao vivo · ' : '') + 'Dados atualizados às ' + d.updatedAt;
@@ -377,6 +378,33 @@
         var h = x.n ? Math.max(4, Math.round(x.n * 100 / max)) : 0;
         return '<div class="vb' + (best && x.day === best.day ? ' is-top' : '') + '" tabindex="0" data-tip="' + fmtDate(x.day).slice(0, 5) + ': ' + plural(x.n, 'agendamento', 'agendamentos') + '"><span style="height:' + h + '%"></span></div>';
       }).join('') + '</div><div class="vaxis">' + days.map(function (x, i) { return '<span>' + (i % step === 0 || i === days.length - 1 ? fmtDate(x.day).slice(0, 5) : '') + '</span>'; }).join('') + '</div>';
+  }
+
+  // Funil interno: visitas e etapas do formulário (medição própria, anônima, independente de cookies e da Meta).
+  var FUNNEL_LABEL = { landing: 'Entraram no site', name_started: 'Começaram o nome', age_step: 'Informaram o nome', whatsapp_step: 'Informaram a idade', date_step: 'Informaram o WhatsApp', time_step: 'Escolheram a data', booking_confirmed: 'Confirmaram o agendamento' };
+  function renderFunnel(d) {
+    var box = $('#ap-funnel'), f = d.funnel;
+    var head = '<div class="panel-head"><div><h2>FUNIL DO SITE</h2><p class="hint">Visitas e etapas do agendamento (medição interna, anônima, sem cookies).</p></div>' +
+      '<div class="chips chips-sm" id="fn-mode"><button type="button" class="chip' + (FN_MODE === 'n' ? ' on' : '') + '" data-fn="n">Todas as visitas</button><button type="button" class="chip' + (FN_MODE === 'ads' ? ' on' : '') + '" data-fn="ads">Só anúncios</button></div></div>';
+    if (!f) { box.innerHTML = head + '<p class="empty-sm">As visitas aparecem para hoje, períodos passados ou o mês atual.</p>'; bindFn(); return; }
+    var top = f.steps[0][FN_MODE] || 0;
+    box.innerHTML = head + (top ? '<ol class="funnel">' + f.steps.map(function (s, i) {
+      var v = s[FN_MODE], pct = top ? Math.round(v * 100 / top) : 0;
+      var prev = i ? f.steps[i - 1][FN_MODE] : null;
+      var drop = prev ? Math.round((prev - v) * 100 / prev) : null;
+      return '<li class="' + (s.event === 'booking_confirmed' ? 'is-goal' : '') + '" title="' + FUNNEL_LABEL[s.event] + ': ' + v + ' (' + pct + '% das visitas)"><span class="fn-label">' + FUNNEL_LABEL[s.event] + '</span>' +
+        '<span class="fn-bar" aria-hidden="true"><span style="width:' + Math.max(v ? 2 : 0, pct) + '%"></span></span><span class="fn-val"><b>' + v + '</b> ' + pct + '%' + (drop ? '<small>−' + drop + '%</small>' : '') + '</span></li>';
+    }).join('') + '</ol>' +
+      '<p class="hint">Conversão do período: <b>' + (top ? Math.round(f.steps[6][FN_MODE] * 1000 / top) / 10 : 0) + '%</b> das visitas confirmaram o agendamento. ' +
+      (f.devices.mobile || f.devices.desktop ? 'Celular: ' + (f.devices.mobile || 0) + ' · Computador: ' + (f.devices.desktop || 0) + '.' : '') + '</p>' +
+      (f.campaigns.length ? '<h3>Origem das visitas</h3><ul class="list-kv">' + f.campaigns.map(function (c) { return '<li><span>' + esc(c.campaign) + '</span><span><b>' + c.visits + '</b> visitas · <b>' + c.bookings + '</b> agendamentos</span></li>'; }).join('') + '</ul>' : '')
+      : '<p class="empty-sm">Nenhuma visita registrada ' + (FN_MODE === 'ads' ? 'vinda de anúncios ' : '') + 'neste período.</p>');
+    bindFn();
+  }
+  var FN_MODE = 'n';
+  function bindFn() {
+    var m = $('#fn-mode'); if (!m) return;
+    m.addEventListener('click', function (e) { var b = e.target.closest('[data-fn]'); if (!b || !apData) return; FN_MODE = b.getAttribute('data-fn'); renderFunnel(apData); });
   }
 
   function fillFilterOptions(d) {

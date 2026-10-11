@@ -376,6 +376,7 @@ export function renderLanding({ settings, availability, faq, logoVersion }) {
     ${s.clinic.address ? `<p>${esc(s.clinic.address)}${s.clinic.maps_url ? ` · <a href="${esc(s.clinic.maps_url)}" target="_blank" rel="noopener">Ver no mapa</a>` : ''}</p>` : ''}
     ${s.clinic.opening_hours_text ? `<p>${esc(s.clinic.opening_hours_text)}</p>` : ''}
     ${wa ? `<p><a href="https://wa.me/55${esc(wa)}" target="_blank" rel="noopener" data-contact>WhatsApp ${esc(formatWhatsapp(wa))}</a></p>` : ''}
+    <p class="foot-privacy">Medimos as etapas do agendamento de forma anônima e sem cookies para melhorar o atendimento. Cookies de anúncios só com a sua autorização.</p>
     <p class="foot-legal"><a href="/privacidade">Política de Privacidade</a> <button type="button" class="link" data-cookie-prefs hidden>Preferências de cookies</button></p>
   </div>
 </footer>

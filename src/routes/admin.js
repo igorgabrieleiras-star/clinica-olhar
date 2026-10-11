@@ -4,6 +4,7 @@ import { getSettings, saveSection, DEFAULTS } from '../settings.js';
 import { dayAvailability, publicAvailability, syncDate, syncUpcoming, effectiveRule } from '../availability.js';
 import { setStatus, rescheduleAppointment } from '../booking.js';
 import { subscribeAppointments } from '../live.js';
+import { funnelReport } from '../funnel.js';
 import { publicRules, optionsFor } from '../availability.js';
 import { nowTimeHM } from '../dates.js';
 import { login, logout, sessionAdmin, changePassword, SESSION_COOKIE, SESSION_HOURS } from '../auth.js';
@@ -425,7 +426,10 @@ export function registerAdmin(router) {
       `SELECT DISTINCT t.utm_campaign AS c FROM attributions t JOIN appointments a ON a.id = t.appointment_id
         WHERE t.utm_campaign IS NOT NULL AND t.utm_campaign <> '' AND a.created_at > now() - interval '180 days' ORDER BY 1 LIMIT 50`,
     );
+    // Funil interno do site (visitas e etapas): só datas que já aconteceram.
+    const funnel = range.from <= today ? { from: range.from, to: range.to < today ? range.to : today, ...(await funnelReport(range.from, range.to < today ? range.to : today)) } : null;
     json(req, res, 200, {
+      funnel,
       period, range, today, single: range.single,
       label: range.single ? formatLongDate(range.from) : `${range.from.split('-').reverse().join('/')} a ${range.to.split('-').reverse().join('/')}`,
       counts, remaining, remainingDays,

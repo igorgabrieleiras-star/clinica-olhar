@@ -371,6 +371,7 @@ button, input { font: inherit; color: inherit; }
 .foot p { margin: 0 0 8px; }
 .foot a, .foot .link { color: #fff; }
 .foot-brand { margin: 0 0 16px !important; }
+.foot-privacy { max-width: 60ch; font-size: 13px; color: #AEB8DC; }
 .foot-legal { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 14px !important; }
 
 /* ---------- Avisos e cookies ---------- */

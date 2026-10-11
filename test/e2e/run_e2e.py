@@ -135,6 +135,8 @@ with sync_playwright() as p:
     pub = browser.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True, locale="pt-BR")
     pg = pub.new_page()
     block_external(pg)
+    funnel_posts = []
+    pg.on("request", lambda r: funnel_posts.append(json.loads(r.post_data or "{}")) if r.url.endswith("/api/funnel") and r.method == "POST" else None)
     pg.goto(BASE + "/?utm_source=facebook&utm_medium=paid&utm_campaign=Exame%20Gratis%20Manaus&utm_content=Criativo%2002&utm_term=Publico%2035%2B&fbclid=TESTFBCLID123")
     pg.wait_for_selector('[data-step="1"]')
     pg.wait_for_timeout(300)
@@ -261,6 +263,11 @@ with sync_playwright() as p:
     pg.wait_for_timeout(700)
     protocol = pg.inner_text('[data-t="protocol"]')
     check("Confirmação com protocolo OLH-", protocol.startswith("OLH-"), protocol)
+    evs = [x.get("event") for x in funnel_posts]
+    first = funnel_posts[0] if funnel_posts else {}
+    check("Funil interno: entrada registrada sozinha ao abrir a página (sem clique, antes dos cookies)", evs[:1] == ["landing"] and first.get("origin", {}).get("utm_campaign") == "Exame Gratis Manaus" and first.get("origin", {}).get("from_ad") is True, json.dumps(first)[:200])
+    check("Funil interno: todas as etapas do formulário enviadas uma vez", all(e in evs for e in ["name_started", "age_step", "whatsapp_step", "date_step", "time_step"]) and len(evs) == len(set(evs)), str(evs))
+    check("Funil interno: nenhum dado pessoal enviado", not any(k in json.dumps(funnel_posts) for k in ["Mariana", "98888", "fbclid", "TESTFBCLID"]), "")
     ticket = pg.inner_text(".ticket")
     check("Cartão de confirmação com nome, idade, data, horário, WhatsApp", all(x in ticket for x in ["Mariana Conceição", "42", "09 de outubro", "09:30", "(92) 98888-7777"]), ticket.replace("\n", " | "))
     pg.screenshot(path=str(SHOTS / "m-06-confirmacao.png"))
