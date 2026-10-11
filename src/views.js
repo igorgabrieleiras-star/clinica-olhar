@@ -381,8 +381,8 @@ export function renderLanding({ settings, availability, faq, logoVersion }) {
 </footer>
 
 <div class="toast" data-toast role="status" aria-live="polite" hidden></div>
-<div class="cookie" data-cookie hidden>
-  <p>Usamos cookies para medir nossos anúncios. <a href="/privacidade">Saiba mais</a></p>
+<div class="cookie" data-cookie role="region" aria-label="Consentimento de cookies" hidden>
+  <p>Cookies de medição de anúncios. <a href="/privacidade">Saiba mais</a></p>
   <div class="cookie-actions">
     <button type="button" class="btn btn-ghost btn-small" data-cookie-no>Recusar</button>
     <button type="button" class="btn btn-primary btn-small" data-cookie-yes>Aceitar</button>

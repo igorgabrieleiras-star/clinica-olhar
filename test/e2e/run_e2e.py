@@ -151,6 +151,10 @@ with sync_playwright() as p:
 
     # Consentimento de cookies → Pixel carrega
     if pg.is_visible("[data-cookie]"):
+        pre = pg.evaluate("() => ({ script: !!document.querySelector('script[src*=fbevents]'), fbq: typeof window.fbq, req: performance.getEntriesByType('resource').some(e => /facebook\\.(com|net)/.test(e.name)) })")
+        check("Consentimento: nada da Meta carrega antes da escolha", not pre["script"] and pre["fbq"] == "undefined" and not pre["req"], json.dumps(pre))
+        cb = pg.locator("[data-cookie]").bounding_box(); nb = pg.locator('input[name="name"]').bounding_box()
+        check("Consentimento compacto: cartão pequeno que não cobre o campo do nome", cb["height"] <= 70 and (cb["y"] >= nb["y"] + nb["height"] or cb["y"] + cb["height"] <= nb["y"]), f"{cb} {nb}")
         pg.screenshot(path=str(SHOTS / "m-01b-cookies.png"))
         pg.click("[data-cookie-yes]")
     pg.wait_for_timeout(200)
@@ -396,6 +400,18 @@ with sync_playwright() as p:
     tb = tp.locator("[data-timer]").bounding_box(); nb = tp.locator('input[name="name"]').bounding_box()
     check("Cronômetro não cobre campos", tb["y"] + tb["height"] <= nb["y"], f"{tb} {nb}")
     c.close()
+
+    # ------------------------------------------------------------------ Recusar cookies: cadastro continua normal, sem Meta
+    rc = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True, locale="pt-BR")
+    rp = rc.new_page(); block_external(rp); rp.goto(BASE + "/"); rp.wait_for_selector("[data-cookie]:not([hidden])", timeout=4000)
+    rp.click("[data-cookie-no]"); rp.wait_for_timeout(300)
+    rp.fill('input[name="name"]', "Teste Recusa"); rp.click('[data-step="1"] [data-next]'); wait_step(rp, 2)
+    rp.fill('input[name="age"]', "40"); rp.click('[data-step="2"] [data-next]'); wait_step(rp, 3)
+    post = rp.evaluate("() => ({ hidden: document.querySelector('[data-cookie]').hidden, script: !!document.querySelector('script[src*=fbevents]'), consent: localStorage.getItem('olhar_ads_consent') })")
+    check("Recusar cookies: aviso some, cadastro segue normalmente e nenhum script da Meta carrega", post["hidden"] and not post["script"] and post["consent"] == "denied", json.dumps(post))
+    rp.reload(); rp.wait_for_timeout(400)
+    check("Recusa lembrada: aviso não volta a cada visita", rp.locator("[data-cookie]").is_hidden())
+    rc.close()
 
     # ------------------------------------------------------------------ Pop-ups pequenos no canto (somente reais)
     c = browser.new_context(viewport={"width": 1366, "height": 860}, locale="pt-BR")
