@@ -13,6 +13,18 @@ export function buildFbc(fbclid, cookieFbc, createdAtMs = Date.now()) {
   return undefined;
 }
 
+/** Só origem + caminho da página: sem parâmetros (utm, fbclid etc.), que podem conter termos de campanha. */
+export function cleanSourceUrl(u) {
+  if (!u) return undefined;
+  try {
+    const url = new URL(u);
+    if (!/^https?:$/.test(url.protocol)) return undefined;
+    return url.origin + url.pathname;
+  } catch {
+    return undefined;
+  }
+}
+
 export function buildLeadPayload({ booking, eventName, ctx, testCode }) {
   const firstName = booking.name.split(' ')[0].normalize('NFD').replace(/\p{M}/gu, '');
   const user_data = {
@@ -33,7 +45,7 @@ export function buildLeadPayload({ booking, eventName, ctx, testCode }) {
         event_time: Math.floor(Date.now() / 1000),
         event_id: booking.eventId,
         action_source: 'website',
-        event_source_url: ctx.landingPage || config.appUrl || undefined,
+        event_source_url: cleanSourceUrl(ctx.landingPage) || config.appUrl || undefined,
         user_data,
       },
     ],

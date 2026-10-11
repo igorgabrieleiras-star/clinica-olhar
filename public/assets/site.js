@@ -87,9 +87,10 @@
     }
     fbq('init', meta.pixelId);
     fbq('track', 'PageView');
-    fbq('track', 'ViewContent', { content_name: 'Exame de vista gratuito', content_category: 'agendamento' });
+    fbq('track', 'ViewContent');
     pending.splice(0).forEach(function (args) { fbq.apply(null, args); });
   }
+  // Eventos sem parâmetros: nenhum nome de procedimento, texto digitado ou dado de saúde vai para a Meta.
   function track(kind, name, params, eventId) {
     if (!meta.pixel) return;
     var args = [kind, name, params || {}];
@@ -520,7 +521,7 @@
   form.addEventListener('focusin', function () {
     if (started) return;
     started = true; ss('olhar_started', true);
-    track('trackCustom', 'StartRegistration', { content_name: 'Exame de vista gratuito' });
+    track('trackCustom', 'StartRegistration');
   });
 
 
@@ -629,8 +630,8 @@
     var key = 'olhar_lead_' + b.eventId;
     if (!ls(key)) {
       ls(key, '1');
-      track('track', 'Lead', { content_name: 'Exame de vista gratuito' }, b.eventId);
-      if (meta.scheduleEvent) track('track', 'Schedule', { content_name: 'Exame de vista gratuito' }, b.eventId);
+      track('track', 'Lead', {}, b.eventId);
+      if (meta.scheduleEvent) track('track', 'Schedule', {}, b.eventId);
     }
     showDone(b, true);
     refreshAvailability();
@@ -658,7 +659,7 @@
   }
 
   $('[data-done]').addEventListener('click', function (e) {
-    if (e.target.closest('[data-wa-confirm]')) track('track', 'Contact', { content_name: 'Confirmação pelo WhatsApp' });
+    if (e.target.closest('[data-wa-confirm]')) track('track', 'Contact');
     if (e.target.closest('[data-again]')) {
       ss(DONE, null);
       state = { step: 1, name: '', age: '', guardian_name: '', guardian_ack: false, whatsapp: state.whatsapp || '', consent_data: false, consent_marketing: false, consent_social: false, date: null, time: null };
@@ -669,7 +670,7 @@
     }
   });
   document.addEventListener('click', function (e) {
-    if (e.target.closest('[data-contact]')) track('track', 'Contact', { content_name: 'WhatsApp do rodapé' });
+    if (e.target.closest('[data-contact]')) track('track', 'Contact');
     var go = e.target.closest('[data-goto-form]');
     if (go) { e.preventDefault(); card.scrollIntoView({ block: 'start', behavior: 'smooth' }); if (current === 1) setTimeout(function () { field('name').focus({ preventScroll: true }); }, 400); }
   });
