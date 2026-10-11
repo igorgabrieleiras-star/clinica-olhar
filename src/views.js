@@ -376,19 +376,12 @@ export function renderLanding({ settings, availability, faq, logoVersion }) {
     ${s.clinic.address ? `<p>${esc(s.clinic.address)}${s.clinic.maps_url ? ` · <a href="${esc(s.clinic.maps_url)}" target="_blank" rel="noopener">Ver no mapa</a>` : ''}</p>` : ''}
     ${s.clinic.opening_hours_text ? `<p>${esc(s.clinic.opening_hours_text)}</p>` : ''}
     ${wa ? `<p><a href="https://wa.me/55${esc(wa)}" target="_blank" rel="noopener" data-contact>WhatsApp ${esc(formatWhatsapp(wa))}</a></p>` : ''}
-    <p class="foot-privacy">Medimos as etapas do agendamento de forma anônima e sem cookies para melhorar o atendimento. Cookies de anúncios só com a sua autorização.</p>
-    <p class="foot-legal"><a href="/privacidade">Política de Privacidade</a> <button type="button" class="link" data-cookie-prefs hidden>Preferências de cookies</button></p>
+    <p class="foot-privacy">Medimos as etapas do agendamento de forma anônima e sem cookies para melhorar o atendimento. Cookies de anúncios só são usados com autorização já registrada.</p>
+    <p class="foot-legal"><a href="/privacidade">Política de Privacidade</a> <button type="button" class="link" data-ads-revoke hidden>Desativar cookies de anúncios</button></p>
   </div>
 </footer>
 
 <div class="toast" data-toast role="status" aria-live="polite" hidden></div>
-<div class="cookie" data-cookie role="region" aria-label="Consentimento de cookies" hidden>
-  <p>Cookies de medição de anúncios. <a href="/privacidade">Saiba mais</a></p>
-  <div class="cookie-actions">
-    <button type="button" class="btn btn-ghost btn-small" data-cookie-no>Recusar</button>
-    <button type="button" class="btn btn-primary btn-small" data-cookie-yes>Aceitar</button>
-  </div>
-</div>
 <script type="application/json" id="boot">${bootJson}</script>
 <script src="${assetUrl('/assets/site.js')}" defer></script>
 </body>

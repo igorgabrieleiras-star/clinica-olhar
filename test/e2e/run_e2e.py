@@ -153,14 +153,13 @@ with sync_playwright() as p:
     name_box = pg.locator('input[name="name"]').bounding_box()
     check("Mobile: oferta e início do formulário na primeira tela", name_box and name_box["y"] + name_box["height"] < 844 * 1.35, f"campo nome y={name_box and round(name_box['y'])}")
 
-    # Consentimento de cookies → Pixel carrega
-    if pg.is_visible("[data-cookie]"):
-        pre = pg.evaluate("() => ({ script: !!document.querySelector('script[src*=fbevents]'), fbq: typeof window.fbq, req: performance.getEntriesByType('resource').some(e => /facebook\\.(com|net)/.test(e.name)) })")
-        check("Consentimento: nada da Meta carrega antes da escolha", not pre["script"] and pre["fbq"] == "undefined" and not pre["req"], json.dumps(pre))
-        cb = pg.locator("[data-cookie]").bounding_box(); nb = pg.locator('input[name="name"]').bounding_box()
-        check("Consentimento compacto: cartão pequeno que não cobre o campo do nome", cb["height"] <= 70 and (cb["y"] >= nb["y"] + nb["height"] or cb["y"] + cb["height"] <= nb["y"]), f"{cb} {nb}")
-        pg.screenshot(path=str(SHOTS / "m-01b-cookies.png"))
-        pg.click("[data-cookie-yes]")
+    # Sem banner de cookies: visitante novo não vê Aceitar/Recusar e nada da Meta carrega sem autorização registrada
+    pre = pg.evaluate("() => ({ banner: !!document.querySelector('[data-cookie], .cookie'), btns: [...document.querySelectorAll('button')].some(b => /^(Aceitar|Recusar)$/.test(b.textContent.trim())), script: !!document.querySelector('script[src*=fbevents]'), fbq: typeof window.fbq, consent: localStorage.getItem('olhar_ads_consent'), revoke: !document.querySelector('[data-ads-revoke]').hidden })")
+    check("Sem banner: nenhum Aceitar/Recusar, nenhum consentimento gravado e nada da Meta carrega", not pre["banner"] and not pre["btns"] and not pre["script"] and pre["fbq"] == "undefined" and pre["consent"] is None and not pre["revoke"], json.dumps(pre))
+    pg.screenshot(path=str(SHOTS / "m-01b-sem-banner.png"))
+    # Autorização registrada anteriormente (escolha válida do visitante) continua respeitada
+    pg.evaluate("() => localStorage.setItem('olhar_ads_consent', 'granted')"); funnel_posts.clear(); pg.reload(); pg.wait_for_selector('input[name="name"]')
+    check("Autorização já registrada: opção discreta de desativar no rodapé", pg.evaluate("() => !document.querySelector('[data-ads-revoke]').hidden"))
     pg.wait_for_timeout(200)
     ev = [e[1] for e in fbq_events(pg) if e[0] == "track"]
     check("Pixel: PageView e ViewContent após consentimento", "PageView" in ev and "ViewContent" in ev, str(ev))
@@ -411,16 +410,13 @@ with sync_playwright() as p:
     check("Cronômetro não cobre campos", tb["y"] + tb["height"] <= nb["y"], f"{tb} {nb}")
     c.close()
 
-    # ------------------------------------------------------------------ Recusar cookies: cadastro continua normal, sem Meta
+    # ------------------------------------------------------------------ Visitante sem autorização: cadastro normal, sem Meta, sem perguntas
     rc = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True, locale="pt-BR")
-    rp = rc.new_page(); block_external(rp); rp.goto(BASE + "/"); rp.wait_for_selector("[data-cookie]:not([hidden])", timeout=4000)
-    rp.click("[data-cookie-no]"); rp.wait_for_timeout(300)
-    rp.fill('input[name="name"]', "Teste Recusa"); rp.click('[data-step="1"] [data-next]'); wait_step(rp, 2)
+    rp = rc.new_page(); block_external(rp); rp.goto(BASE + "/"); rp.wait_for_selector('input[name="name"]')
+    rp.fill('input[name="name"]', "Teste Sem Cookies"); rp.click('[data-step="1"] [data-next]'); wait_step(rp, 2)
     rp.fill('input[name="age"]', "40"); rp.click('[data-step="2"] [data-next]'); wait_step(rp, 3)
-    post = rp.evaluate("() => ({ hidden: document.querySelector('[data-cookie]').hidden, script: !!document.querySelector('script[src*=fbevents]'), consent: localStorage.getItem('olhar_ads_consent') })")
-    check("Recusar cookies: aviso some, cadastro segue normalmente e nenhum script da Meta carrega", post["hidden"] and not post["script"] and post["consent"] == "denied", json.dumps(post))
-    rp.reload(); rp.wait_for_timeout(400)
-    check("Recusa lembrada: aviso não volta a cada visita", rp.locator("[data-cookie]").is_hidden())
+    post = rp.evaluate("() => ({ script: !!document.querySelector('script[src*=fbevents]'), fbq: typeof window.fbq, consent: localStorage.getItem('olhar_ads_consent') })")
+    check("Sem autorização: cadastro segue normalmente, nenhum script da Meta e nenhum consentimento fabricado", not post["script"] and post["fbq"] == "undefined" and post["consent"] is None, json.dumps(post))
     rc.close()
 
     # ------------------------------------------------------------------ Pop-ups pequenos no canto (somente reais)

@@ -96,22 +96,24 @@
     var args = [kind, name, params || {}];
     if (eventId) args.push({ eventID: eventId });
     if (pixelLoaded) fbq.apply(null, args);
-    else if (!meta.requireConsent || ls('olhar_ads_consent') === null) pending.push(args);
+    else if (!meta.requireConsent) pending.push(args);
   }
+  // Sem banner: a Meta só recebe dados de quem já registrou autorização (escolha anterior, válida e revogável).
+  // Ninguém é marcado como "autorizado" automaticamente; sem autorização, nada é enviado à Meta (nem pelo servidor).
   (function setupConsent() {
-    var bar = $('[data-cookie]');
-    var prefs = $('[data-cookie-prefs]');
     if (!meta.pixel) return;
-    if (prefs && meta.requireConsent) prefs.hidden = false;
-    function show() { bar.hidden = false; document.body.classList.add('has-cookie'); }
-    function hide() { bar.hidden = true; document.body.classList.remove('has-cookie'); }
     if (!meta.requireConsent) { loadPixel(); return; }
-    var c = ls('olhar_ads_consent');
-    if (c === 'granted') loadPixel();
-    else if (c === null) show();
-    $('[data-cookie-yes]').addEventListener('click', function () { ls('olhar_ads_consent', 'granted'); hide(); loadPixel(); });
-    $('[data-cookie-no]').addEventListener('click', function () { ls('olhar_ads_consent', 'denied'); hide(); pending.length = 0; });
-    if (prefs) prefs.addEventListener('click', function () { show(); });
+    if (ls('olhar_ads_consent') !== 'granted') { pending.length = 0; return; }
+    loadPixel();
+    var revoke = $('[data-ads-revoke]');
+    if (!revoke) return;
+    revoke.hidden = false;
+    revoke.addEventListener('click', function () {
+      ls('olhar_ads_consent', 'denied');
+      document.cookie = '_fbp=; Max-Age=0; path=/';
+      document.cookie = '_fbc=; Max-Age=0; path=/';
+      location.reload();
+    });
   })();
 
   // ---------------- Estado do formulário ----------------
@@ -706,7 +708,7 @@
     if (!boot.socialProof) return;
     var toast = $('[data-toast]');
     var queue = [], shown = 0, MAX = 5, hideT = null, tries = 0;
-    var GUARDED = 'input, select, textarea, button, a.btn, .calendar, .time-grid, .today-box, .cookie:not([hidden])';
+    var GUARDED = 'input, select, textarea, button, a.btn, .calendar, .time-grid, .today-box';
     function overlaps(r) {
       return $$(GUARDED).some(function (el) {
         if (el === toast || toast.contains(el)) return false;
