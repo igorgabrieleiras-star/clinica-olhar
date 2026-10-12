@@ -152,7 +152,7 @@ export async function dayAvailability(date, client, { minTime = null, sameDayCap
 export function publicRules(settings) {
   const b = settings.booking;
   return {
-    flags: { today: b.today_enabled !== false, tomorrow: b.tomorrow_enabled !== false, saturday: b.saturday_enabled !== false },
+    flags: { today: b.today_enabled !== false }, // a janela (semana atual + próxima, seg–sáb) é fixa; só o mesmo dia pode ser desligado
     leadMinutes: Number.isFinite(Number(b.min_lead_minutes)) ? Number(b.min_lead_minutes) : 60,
     sameDayCap: b.same_day_cap === null || b.same_day_cap === undefined || b.same_day_cap === '' ? null : Number(b.same_day_cap),
   };
@@ -165,7 +165,7 @@ export function optionsFor(candidate, rules, now) {
   return { minTime: minTime || '24:00', sameDayCap: rules.sameDayCap };
 }
 
-/** O que o visitante vê: hoje (horários futuros), amanhã e o próximo sábado, com vagas reais. */
+/** O que o visitante vê: semana atual + próxima semana (seg–sáb), hoje só com horários futuros, sempre com vagas reais. */
 export async function publicAvailability(now = new Date()) {
   const settings = await getSettings();
   const enabled = !!settings.booking.enabled;
@@ -185,6 +185,7 @@ export async function publicAvailability(now = new Date()) {
       tag: c.tag,
       isToday: c.isToday,
       isSaturday: c.isSaturday,
+      week: c.week,
       label: formatLongDate(c.date),
       remaining: day.remaining,
       available: day.remaining > 0,

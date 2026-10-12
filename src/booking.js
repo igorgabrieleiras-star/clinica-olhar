@@ -85,7 +85,7 @@ export async function createBooking(input, { now = new Date(), ipHash = null, ad
   }
 
   const settings = await getSettings();
-  // Fluxo público: só HOJE/AMANHÃ/SÁBADO (conforme o painel), com antecedência mínima calculada pelo relógio do servidor.
+  // Fluxo público: só datas da janela (semana atual + próxima, seg–sáb), com antecedência mínima calculada pelo relógio do servidor.
   let dayOptions = {};
   if (!admin) {
     const rules = publicRules(settings);

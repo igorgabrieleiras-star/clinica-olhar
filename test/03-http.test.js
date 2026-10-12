@@ -62,7 +62,7 @@ test('XSS e validação no servidor', async () => {
   const r = await call('POST', '/api/bookings', booking({ name: '<img src=x onerror=alert(1)>' }));
   assert.equal(r.status, 422);
   assert.equal(r.data.field, 'name');
-  const r2 = await call('POST', '/api/bookings', booking({ date: '2026-10-13' }));
+  const r2 = await call('POST', '/api/bookings', booking({ date: '2026-10-19' })); // fora da janela (3ª semana)
   assert.equal(r2.data.code, 'DATE_NOT_ALLOWED');
 });
 

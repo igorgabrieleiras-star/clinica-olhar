@@ -410,3 +410,10 @@ body.modal-open { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
 }
+
+/* Disponibilidade de datas (janela de 2 semanas) */
+.dw-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.dw-title { margin: 0 0 6px; font-weight: 800; font-size: 13px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted, #5B6B7C); }
+.dw-day { margin: 0; padding: 7px 0; border-bottom: 1px solid #EEF2F6; }
+.dw-day:last-child { border-bottom: 0; }
+.dw-day.is-off b { color: #8A97A6; text-decoration: line-through; }

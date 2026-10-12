@@ -22,15 +22,15 @@ before(async () => {
   await resetDb();
   // Expediente oficial: 09:00–17:00 todos os dias, intervalos de 30 min, 5 vagas por horário.
   await q(`UPDATE schedule_rules SET is_open = true, open_time = '09:00', close_time = '17:00', lunch_start = NULL, lunch_end = NULL, interval_minutes = 30, capacity = 5`);
-  await setBooking({ today_enabled: true, tomorrow_enabled: true, saturday_enabled: true, min_lead_minutes: 60, same_day_cap: 3 });
+  await setBooking({ today_enabled: true, min_lead_minutes: 60, same_day_cap: 3 });
 });
 after(async () => { await pool.end(); });
 
-test('Padrões novos: agendamentos ativados para hoje, amanhã e sábado; 60 min; teto 3', async () => {
+test('Padrões: agendamento no mesmo dia ativado; 60 min; teto 3', async () => {
   const { DEFAULTS } = await import('../src/settings.js');
   const b = DEFAULTS.booking;
   assert.equal(b.enabled, true);
-  assert.equal(b.today_enabled && b.tomorrow_enabled && b.saturday_enabled, true);
+  assert.equal(b.today_enabled, true);
   assert.equal(b.min_lead_minutes, 60);
   assert.equal(b.same_day_cap, 3);
   const { rows } = await q('SELECT count(*) AS n FROM schedule_rules');
@@ -61,7 +61,7 @@ test('Acesso às 13h20: primeiro horário elegível é 14:30 (grade de 30 min)',
   assert.ok(!todayOf(pub).times.some((t) => t.time < '14:20'));
 });
 
-test('Acesso perto das 17h (16:10): sem horários hoje → hoje oculto, amanhã e sábado continuam', async () => {
+test('Acesso perto das 17h (16:10): sem horários hoje → hoje oculto, demais datas continuam', async () => {
   const pub = await publicAvailability(at(QUI, '16:10'));
   assert.equal(todayOf(pub).available, false);
   assert.equal(todayOf(pub).times.length, 0);
@@ -127,40 +127,37 @@ test('Cancelamento libera vaga de hoje', async () => {
   assert.equal(t.left, 1);
 });
 
-test('Opções do painel: desligar HOJE, AMANHÃ ou SÁBADO', async () => {
+test('Opção do painel: desligar o mesmo dia tira só HOJE da janela', async () => {
   const now = at(QUI, '10:00');
   await setBooking({ today_enabled: false });
-  let pub = await publicAvailability(now);
+  const pub = await publicAvailability(now);
   assert.ok(!pub.dates.some((d) => d.isToday));
+  assert.equal(pub.dates[0].date, '2026-10-09');
   await assert.rejects(createBooking(person({ date: QUI, time: '15:30' }), { now }), (e) => e.code === 'DATE_NOT_ALLOWED');
-  await setBooking({ today_enabled: true, saturday_enabled: false });
-  pub = await publicAvailability(now);
-  assert.deepEqual(pub.dates.map((d) => d.date), [QUI, '2026-10-09']);
-  await assert.rejects(createBooking(person({ date: '2026-10-10', time: '10:00' }), { now }), (e) => e.code === 'DATE_NOT_ALLOWED');
-  await setBooking({ saturday_enabled: true });
+  await setBooking({ today_enabled: true });
 });
 
-test('Sábado → domingo: domingo bloqueado pelo painel não aceita agendamentos', async () => {
+test('Sábado: sábado + próxima semana; domingo nunca é oferecido nem aceito; bloqueio vale também para HOJE', async () => {
   const sab = at('2026-10-10', '10:00');
   let pub = await publicAvailability(sab);
-  assert.deepEqual(pub.dates.map((d) => [d.date, d.tag]), [['2026-10-10', 'HOJE'], ['2026-10-11', 'AMANHÃ'], ['2026-10-17', 'PRÓXIMO SÁBADO']]);
+  assert.deepEqual(pub.dates.map((d) => d.date), ['2026-10-10', '2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15', '2026-10-16', '2026-10-17']);
   assert.ok(pub.dates.every((d) => d.available));
-  await q(`INSERT INTO date_overrides (date, is_blocked, reason) VALUES ('2026-10-11', true, 'Domingo sem atendimento')`);
-  pub = await publicAvailability(sab);
-  assert.equal(pub.dates.find((d) => d.date === '2026-10-11').available, false);
-  await assert.rejects(createBooking(person({ date: '2026-10-11', time: '10:00' }), { now: sab }), (e) => e.code === 'DATE_UNAVAILABLE');
-  // Bloqueio prevalece também sobre HOJE
+  await assert.rejects(createBooking(person({ date: '2026-10-11', time: '10:00' }), { now: sab }), (e) => e.code === 'DATE_NOT_ALLOWED');
   await q(`INSERT INTO date_overrides (date, is_blocked, reason) VALUES ('2026-10-10', true, 'Feriado')`);
   pub = await publicAvailability(sab);
   assert.equal(pub.today, null);
-  await q(`DELETE FROM date_overrides WHERE date IN ('2026-10-10','2026-10-11')`);
+  assert.equal(pub.dates.find((d) => d.date === '2026-10-10').available, false);
+  await q(`DELETE FROM date_overrides WHERE date = '2026-10-10'`);
 });
 
-test('Sexta → sábado: sem data duplicada; virada de mês', async () => {
-  let pub = await publicAvailability(at('2026-10-09', '10:00'));
-  assert.deepEqual(pub.dates.map((d) => [d.date, d.tag]), [['2026-10-09', 'HOJE'], ['2026-10-10', 'AMANHÃ · SÁBADO']]);
-  pub = await publicAvailability(at('2026-10-31', '12:00'));
-  assert.deepEqual(pub.dates.map((d) => d.date), ['2026-10-31', '2026-11-01', '2026-11-07']);
+test('Datas fora da janela são recusadas no servidor; virada de mês', async () => {
+  const now = at(QUI, '10:00');
+  await assert.rejects(createBooking(person({ date: '2026-10-19', time: '10:00' }), { now }), (e) => e.code === 'DATE_NOT_ALLOWED'); // 3ª semana
+  await assert.rejects(createBooking(person({ date: '2026-10-07', time: '10:00' }), { now }), (e) => e.code === 'DATE_NOT_ALLOWED'); // passado
+  const ok = await createBooking(person({ date: '2026-10-17', time: '10:00' }), { now }); // sábado da próxima semana
+  assert.ok(ok.protocol);
+  const pub = await publicAvailability(at('2026-10-31', '12:00'));
+  assert.deepEqual(pub.dates.map((d) => d.date), ['2026-10-31', '2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06', '2026-11-07']);
 });
 
 test('Horário bloqueado no painel some de hoje; horário lotado aparece esgotado', async () => {
@@ -171,14 +168,11 @@ test('Horário bloqueado no painel some de hoje; horário lotado aparece esgotad
   assert.equal(day.times.find((t) => t.time === '15:00').available, false);
 });
 
-test('Contador do topo = soma real (hoje elegível + amanhã + sábado)', async () => {
+test('Contador do topo = soma real de todas as datas da janela (hoje só horários elegíveis)', async () => {
   const now = at(QUI, '10:00');
   const pub = await publicAvailability(now);
-  const parts = await Promise.all([
-    dayAvailability(QUI, null, { minTime: '11:00', sameDayCap: 3 }),
-    dayAvailability('2026-10-09'),
-    dayAvailability('2026-10-10'),
-  ]);
+  const parts = [];
+  for (const d of pub.dates) parts.push(await dayAvailability(d.date, null, d.isToday ? { minTime: '11:00', sameDayCap: 3 } : {}));
   assert.equal(pub.total, parts.reduce((n, d) => n + d.remaining, 0));
 });
 

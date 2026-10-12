@@ -66,32 +66,9 @@ function seatsMarkup(av, threshold = 10) {
   return `<span class="seats-dot is-live" aria-hidden="true"></span><span class="seats-text"><strong class="seats-title">AGENDAMENTOS ABERTOS</strong><span class="seats-count">${count}</span></span>`;
 }
 
-/**
- * Datas do texto principal: exatamente as que o cliente pode escolher no calendário (com vagas), uma palavra por data.
- *   seg–qui: hoje, amanhã ou sábado · sex: hoje ou amanhã (amanhã já é sábado) · sáb: hoje, amanhã ou o próximo sábado
- *   dom: hoje, amanhã ou sábado. Datas bloqueadas ou sem horários não aparecem.
- */
-export function dayWordList(av) {
-  const todayIso = av.now?.date || (av.dates || []).find((d) => d.isToday)?.date;
-  const todayIsSaturday = todayIso ? new Date(todayIso + 'T12:00:00Z').getUTCDay() === 6 : false;
-  const words = [];
-  for (const d of av.dates || []) {
-    if (!d.available) continue;
-    const kinds = d.kinds || [d.kind];
-    const w = d.isToday || kinds.includes('hoje') ? 'hoje' : kinds.includes('amanha') ? 'amanhã' : todayIsSaturday ? 'o próximo sábado' : 'sábado';
-    if (!words.includes(w)) words.push(w);
-  }
-  return words;
-}
-export function dayWords(av) {
-  const w = dayWordList(av);
-  if (!w.length) return '';
-  return w.length === 1 ? w[0] : w.slice(0, -1).join(', ') + ' ou ' + w[w.length - 1];
-}
 /** Texto principal (HTML), com as datas em negrito; sem vagas, não anuncia disponibilidade. */
 export function ledeHtml(av) {
-  const words = av.enabled && av.total > 0 ? dayWords(av) : '';
-  if (words) return `Faça seu cadastro e escolha seu horário para <b>${esc(words)}</b>.`;
+  if (av.enabled && av.total > 0) return 'Faça seu cadastro e escolha uma das <b>datas e horários disponíveis</b>.';
   return av.waitlist
     ? 'No momento, todas as vagas foram preenchidas. Deixe seu cadastro na lista de espera e avisaremos quando abrirem novos horários.'
     : 'No momento, não há horários disponíveis. Novas datas serão abertas em breve.';

@@ -8,7 +8,7 @@ import { funnelReport } from '../funnel.js';
 import { publicRules, optionsFor } from '../availability.js';
 import { nowTimeHM } from '../dates.js';
 import { login, logout, sessionAdmin, changePassword, SESSION_COOKIE, SESSION_HOURS } from '../auth.js';
-import { todayISO, addDays, publicCandidateDates, isISODate, formatLongDate, timeToMinutes } from '../dates.js';
+import { todayISO, addDays, publicCandidateDates, nextSaturdayISO, isISODate, formatLongDate, formatShortDate, timeToMinutes, weekdayOf } from '../dates.js';
 import { cleanName, cleanAge, cleanWhatsapp, cleanTime, ValidationError, formatWhatsapp } from '../validate.js';
 import { json, readJson, parseCookies, setCookie, clientIp, rateLimit, HttpError, send } from '../http.js';
 import {
@@ -91,14 +91,14 @@ function validateHours(r, prefix = '') {
 // ---------- Período (sempre pela data do exame, no fuso de Manaus) ----------
 /**
  * Converte o período escolhido no painel em um intervalo de datas do exame.
- *   hoje · amanha · sabado (o próximo sábado oferecido no site) · 7d (hoje e os 6 dias anteriores)
+ *   hoje · amanha · sabado (o próximo sábado; no sábado, o da semana seguinte) · 7d (hoje e os 6 dias anteriores)
  *   mes (do dia 1 ao último dia do mês atual) · custom (de/até, no máximo 366 dias) · '' (todos)
  */
 export function periodRange(period, params, n = now()) {
   const today = todayISO(n);
   if (period === 'hoje') return { from: today, to: today, single: true };
   if (period === 'amanha') { const d = addDays(today, 1); return { from: d, to: d, single: true }; }
-  if (period === 'sabado') { const d = publicCandidateDates(n).find((c) => c.kinds.includes('sabado')).date; return { from: d, to: d, single: true }; }
+  if (period === 'sabado') { const d = nextSaturdayISO(n); return { from: d, to: d, single: true }; }
   if (period === '7d') return { from: addDays(today, -6), to: today, single: false };
   if (period === 'mes') {
     const first = today.slice(0, 8) + '01';
@@ -315,9 +315,8 @@ export function registerAdmin(router) {
     await requireAdmin(req);
     const n = now();
     const today = todayISO(n);
-    const cands = publicCandidateDates(n);
     const tomorrow = addDays(today, 1);
-    const saturday = cands.find((c) => c.kinds.includes('sabado')).date;
+    const saturday = nextSaturdayISO(n);
     const { rows: [c] } = await q(
       `SELECT count(*) FILTER (WHERE status <> 'CANCELADO') AS total,
               count(*) FILTER (WHERE status <> 'CANCELADO' AND date = $1) AS today,
@@ -596,6 +595,32 @@ export function registerAdmin(router) {
     await syncDate(rows[0].date);
     await audit(admin.id, 'slot_reset', 'slot', params.id);
     json(req, res, 200, { ok: true });
+  });
+
+  // Disponibilidade de datas: a janela aberta no site (semana atual + próxima, seg–sáb), com o estado de cada data.
+  // Desativar uma data grava uma exceção (date_overrides.is_blocked) só para aquele dia; reativar remove a exceção.
+  router.get('/api/admin/date-window', async (req, res) => {
+    await requireAdmin(req);
+    const n = now();
+    const settings = await getSettings();
+    const rules = publicRules(settings);
+    const cands = publicCandidateDates(n); // janela completa (inclui hoje mesmo se o mesmo dia estiver desligado)
+    const { rows: ovs } = await q('SELECT date, is_blocked, reason FROM date_overrides WHERE date = ANY($1::date[])', [cands.map((c) => c.date)]);
+    const ov = new Map(ovs.map((o) => [o.date, o]));
+    const days = [];
+    for (const c of cands) {
+      const o = ov.get(c.date);
+      const day = await dayAvailability(c.date, null, optionsFor(c, rules, n));
+      const blocked = !!o?.is_blocked;
+      const sameDayOff = c.isToday && rules.flags.today === false;
+      days.push({
+        date: c.date, week: c.week, weekday: weekdayOf(c.date), short: formatShortDate(c.date), label: formatLongDate(c.date),
+        isToday: c.isToday, active: !blocked, reason: blocked ? o.reason : null,
+        booked: day.booked, remaining: day.remaining,
+        status: blocked ? 'desativada' : sameDayOff ? 'mesmo_dia_desligado' : !day.open ? 'sem_atendimento' : day.remaining > 0 ? 'aberta' : c.isToday && day.slots.some((x) => x.eligible === false) ? 'encerrada_hoje' : 'lotada',
+      });
+    }
+    json(req, res, 200, { today: todayISO(n), days });
   });
 
   router.get('/api/admin/schedule-rules', async (req, res) => {

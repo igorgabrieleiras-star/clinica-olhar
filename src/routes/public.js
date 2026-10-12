@@ -7,7 +7,7 @@ import { parsePublicBooking, createBooking, confirmationView, hashIp, BookingErr
 import { sendConversion } from '../meta.js';
 import { cleanName, cleanWhatsapp, cleanAge, ValidationError } from '../validate.js';
 import { json, html, readJson, rateLimit, clientIp, parseCookies, HttpError, send } from '../http.js';
-import { renderLanding, renderPrivacy, renderNotFound, dayWordList } from '../views.js';
+import { renderLanding, renderPrivacy, renderNotFound } from '../views.js';
 import { CLIENT_EVENTS, recordFunnel, funnelOrigin, deviceOf, validSession } from '../funnel.js';
 
 async function loadFaq(settings) {
@@ -150,10 +150,13 @@ export function registerPublic(router) {
 /** Avisos da clínica para os pop-ups: nunca simulam pacientes. Os dias citados vêm da agenda real. */
 export async function institutionalItems() {
   const av = await publicAvailability(now());
-  const words = dayWordList(av); // mesmas datas do texto principal (uma palavra por data)
   const items = [{ kind: 'info', text: 'Exame de vista 100% gratuito.', sub: 'Agende em poucos minutos' }];
-  if (av.enabled && av.total > 0 && words.length) {
-    items.push({ kind: 'info', text: `Horários disponíveis para ${words.length === 1 ? words[0] : words.slice(0, -1).join(', ') + ' e ' + words.at(-1)}.`, sub: 'Agendamentos abertos' });
+  if (av.enabled && av.total > 0) {
+    const weeks = new Set(av.dates.filter((d) => d.available).map((d) => d.week));
+    const sunday = new Date(av.now.date + 'T12:00:00Z').getUTCDay() === 0; // no domingo, a 1ª semana começa amanhã
+    const w1 = sunday ? 'a partir de amanhã' : 'nesta semana';
+    const when = weeks.size > 1 ? (sunday ? 'a partir de amanhã e na semana seguinte' : 'nesta semana e na próxima') : weeks.has(2) ? (sunday ? 'na semana seguinte' : 'na próxima semana') : w1;
+    items.push({ kind: 'info', text: `Horários disponíveis ${when}.`, sub: 'Agendamentos abertos' });
   }
   items.push({ kind: 'info', text: 'Confirmação na hora, com número de protocolo.', sub: 'Clínica Olhar' });
   items.push({ kind: 'info', text: 'Seus dados protegidos conforme a LGPD.', sub: 'Clínica Olhar' });

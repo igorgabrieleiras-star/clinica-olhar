@@ -33,37 +33,50 @@ export function weekdayOf(iso) {
   return new Date(iso + 'T12:00:00Z').getUTCDay();
 }
 
+const WEEKDAY_TAG = ['DOMINGO', 'SEGUNDA', 'TERÇA', 'QUARTA', 'QUINTA', 'SEXTA', 'SÁBADO'];
+
 /**
- * Datas que o fluxo público pode oferecer: HOJE, AMANHÃ e o PRÓXIMO SÁBADO (cada uma pode ser desligada no painel).
- * - Datas iguais aparecem uma vez só (sexta-feira: amanhã já é sábado → "AMANHÃ · SÁBADO").
- * - Sábado: hoje é sábado, amanhã é domingo e o "próximo sábado" é o da semana seguinte.
- * Retorna em ordem cronológica: [{ date, kinds: ['hoje'|'amanha'|'sabado'], kind, tag, isToday, isSaturday }]
+ * Janela de agendamento: SEMANA ATUAL + PRÓXIMA SEMANA, de segunda a sábado (domingo nunca), no fuso de Manaus.
+ * - A semana vai de segunda a sábado. Dias que já passaram ficam de fora.
+ * - Domingo: a "semana atual" é a que começa amanhã (segunda) e a próxima vem em seguida.
+ * - Calculada pela data de hoje: ao começar uma nova semana, a seguinte entra sozinha na janela.
+ * flags.today === false tira o dia de hoje (agendamentos no mesmo dia desligados no painel).
+ * Retorna em ordem cronológica: [{ date, kinds, kind, tag, isToday, isSaturday, week }]
  */
-export function publicCandidateDates(now = new Date(), flags = {}) {
-  const on = { today: flags.today !== false, tomorrow: flags.tomorrow !== false, saturday: flags.saturday !== false };
+export function bookingWindow(now = new Date()) {
   const today = todayISO(now);
-  const tomorrow = addDays(today, 1);
   const dow = weekdayOf(today);
-  const daysToSaturday = (6 - dow + 7) % 7 || 7; // o "próximo sábado" nunca é hoje
-  const saturday = addDays(today, daysToSaturday);
-  const map = new Map();
-  const add = (date, kind) => { if (!map.has(date)) map.set(date, []); map.get(date).push(kind); };
-  if (on.today) add(today, 'hoje');
-  if (on.tomorrow) add(tomorrow, 'amanha');
-  if (on.saturday) add(saturday, 'sabado');
-  return [...map.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([date, kinds]) => ({
-    date,
-    kinds,
-    kind: kinds[0],
-    tag: candidateTag(kinds, dow),
-    isToday: date === today,
-    isSaturday: weekdayOf(date) === 6,
-  }));
+  const monday = dow === 0 ? addDays(today, 1) : addDays(today, 1 - dow);
+  return { today, start: monday < today ? today : monday, end: addDays(monday, 12), monday };
 }
 
-function candidateTag(kinds, todayDow) {
-  const names = { hoje: 'HOJE', amanha: 'AMANHÃ', sabado: todayDow === 6 ? 'PRÓXIMO SÁBADO' : 'SÁBADO' };
-  return kinds.map((k) => names[k]).join(' · ');
+export function publicCandidateDates(now = new Date(), flags = {}) {
+  const { today, monday, end } = bookingWindow(now);
+  const tomorrow = addDays(today, 1);
+  const out = [];
+  for (let d = monday; d <= end; d = addDays(d, 1)) {
+    if (d < today) continue; // dias que já passaram
+    if (weekdayOf(d) === 0) continue; // domingo nunca tem atendimento
+    if (d === today && flags.today === false) continue;
+    const kind = d === today ? 'hoje' : d === tomorrow ? 'amanha' : 'semana';
+    out.push({
+      date: d,
+      kinds: [kind],
+      kind,
+      tag: kind === 'hoje' ? 'HOJE' : kind === 'amanha' ? 'AMANHÃ' : WEEKDAY_TAG[weekdayOf(d)],
+      isToday: d === today,
+      isSaturday: weekdayOf(d) === 6,
+      week: d <= addDays(monday, 5) ? 1 : 2,
+    });
+  }
+  return out;
+}
+
+/** Próximo sábado depois de hoje (no sábado, o da semana seguinte) — usado nos filtros do painel. */
+export function nextSaturdayISO(now = new Date()) {
+  const today = todayISO(now);
+  const dow = weekdayOf(today);
+  return addDays(today, (6 - dow + 7) % 7 || 7);
 }
 
 /** Primeiro horário permitido hoje: agora + antecedência mínima (HH:MM). null se já passou do fim do dia. */

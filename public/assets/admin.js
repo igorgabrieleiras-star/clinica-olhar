@@ -573,6 +573,7 @@
     agendaDate = agendaDate || addDays(todayLocal(), 1);
     main().innerHTML = '<div class="page-head"><div><h1>Agenda</h1><p>Ocupação real de cada horário, bloqueios e regras de atendimento.</p></div></div>' +
       '<section class="panel"><div class="day-head"><div class="btn-row"><button class="btn small" data-d="-1">← Dia anterior</button><input type="date" id="ag-date" value="' + agendaDate + '" style="width:auto"><button class="btn small" data-d="1">Próximo dia →</button><button class="btn small" data-d="today">Hoje</button></div></div><div id="ag-day" style="margin-top:14px"></div></section>' +
+      '<section class="panel" id="dw-panel"><h2>DISPONIBILIDADE DE DATAS</h2><p class="hint">O site abre sozinho a <b>semana atual + a próxima semana</b>, de segunda a sábado (domingo nunca). Quando começa uma nova semana, a seguinte entra automaticamente. Desmarque uma data para retirá-la só daquele dia; marque de novo para reativar.</p><div id="date-window" class="empty">Carregando…</div></section>' +
       '<form class="panel" id="site-opts"><h2>CONFIGURAÇÕES DA AGENDA — datas oferecidas no site</h2><p class="hint">O site calcula sozinho, todos os dias, as datas permitidas. Bloqueios de datas e horários sempre prevalecem.</p><div id="site-opts-body" class="empty">Carregando…</div></form>' +
       '<section class="panel" id="rules-panel"><h2>CONFIGURAÇÕES DA AGENDA — horário de funcionamento por dia da semana</h2><p class="hint">Ao salvar, os próximos 60 dias são atualizados. Horários que você editou manualmente não mudam, e horários com pacientes nunca são apagados.</p><div id="rules"></div></section>' +
       '<section class="panel"><h2>Exceções por data</h2><p class="hint">Feriados, dias sem atendimento ou horário especial em uma data específica.</p><div id="overrides"></div></section>';
@@ -584,7 +585,7 @@
         $('#ag-date').value = agendaDate; loadDay();
       });
     });
-    loadDay(); loadRules(); loadSiteOptions();
+    loadDay(); loadRules(); loadSiteOptions(); loadDateWindow();
   }
   function loadSiteOptions() {
     api('GET', '/api/admin/settings').then(function (d) {
@@ -594,8 +595,6 @@
       $('#site-opts-body').innerHTML =
         row('enabled', b.enabled, 'Agendamentos online abertos', 'desligado, o site não aceita novos agendamentos.') +
         row('today_enabled', b.today_enabled !== false, 'AGENDAMENTOS PARA HOJE', 'somente horários futuros, respeitando a antecedência mínima.') +
-        row('tomorrow_enabled', b.tomorrow_enabled !== false, 'AGENDAMENTOS PARA AMANHÃ', 'sempre que houver capacidade.') +
-        row('saturday_enabled', b.saturday_enabled !== false, 'AGENDAMENTOS PARA SÁBADO', 'o próximo sábado (no sábado, o da semana seguinte).') +
         '<div class="form-grid">' +
         '<label class="f"><span>ANTECEDÊNCIA MÍNIMA para hoje (minutos)</span><input type="number" name="min_lead_minutes" min="0" max="1440" step="5" value="' + (b.min_lead_minutes == null ? 60 : b.min_lead_minutes) + '"></label>' +
         '<label class="f"><span>LIMITE DE VAGAS DO MESMO DIA (por horário)</span><input type="number" name="same_day_cap" min="1" max="500" placeholder="sem limite extra" value="' + (b.same_day_cap == null ? '' : b.same_day_cap) + '"></label>' +
@@ -607,11 +606,42 @@
     if (!e.target || e.target.id !== 'site-opts') return;
     e.preventDefault();
     var f = e.target, body = {};
-    ['enabled', 'today_enabled', 'tomorrow_enabled', 'saturday_enabled'].forEach(function (n) { body[n] = $('[name=' + n + ']', f).checked; });
+    ['enabled', 'today_enabled'].forEach(function (n) { body[n] = $('[name=' + n + ']', f).checked; });
     body.min_lead_minutes = $('[name=min_lead_minutes]', f).value;
     body.same_day_cap = $('[name=same_day_cap]', f).value;
-    api('PUT', '/api/admin/settings/booking', body).then(function () { toast('Opções da agenda salvas. O site já foi atualizado.'); }).catch(fail);
+    api('PUT', '/api/admin/settings/booking', body).then(function () { toast('Opções da agenda salvas. O site já foi atualizado.'); loadDateWindow(); }).catch(fail);
   });
+  var DW_DAYS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+  var DW_STATUS = { aberta: null, lotada: 'lotada', desativada: 'desativada', sem_atendimento: 'sem atendimento neste dia da semana', encerrada_hoje: 'sem horários restantes hoje', mesmo_dia_desligado: 'agendamento no mesmo dia desligado' };
+  function loadDateWindow() {
+    var box = $('#date-window');
+    if (!box) return;
+    api('GET', '/api/admin/date-window').then(function (d) {
+      var weeks = [1, 2].map(function (w) {
+        var list = d.days.filter(function (x) { return x.week === w; });
+        if (!list.length) return '';
+        return '<div class="dw-week"><p class="dw-title">' + (w === 1 ? 'Semana atual' : 'Próxima semana') + '</p>' + list.map(function (x) {
+          var st = DW_STATUS[x.status];
+          var info = x.status === 'aberta' ? x.remaining + (x.remaining === 1 ? ' vaga livre' : ' vagas livres') : st;
+          if (x.booked) info += ' · ' + x.booked + (x.booked === 1 ? ' agendado' : ' agendados');
+          return '<label class="cbx dw-day' + (x.active ? '' : ' is-off') + '"><input type="checkbox" data-dw="' + x.date + '"' + (x.active ? ' checked' : '') + '><span><b>' + DW_DAYS[x.weekday] + ', ' + x.short + '</b>' + (x.isToday ? ' <span class="hint">(hoje)</span>' : '') + ' — <span class="hint">' + esc(info || '') + '</span></span></label>';
+        }).join('') + '</div>';
+      }).join('');
+      box.className = 'dw-grid';
+      box.innerHTML = weeks || '<p class="hint">Nenhuma data na janela.</p>';
+      $$('[data-dw]', box).forEach(function (cb) {
+        cb.addEventListener('change', function () {
+          var date = cb.getAttribute('data-dw');
+          cb.disabled = true;
+          var req = cb.checked
+            ? api('DELETE', '/api/admin/date-overrides/' + date)
+            : api('PUT', '/api/admin/date-overrides/' + date, { is_blocked: true, reason: 'Desativada no painel' });
+          req.then(function () { toast(cb.checked ? 'Data reativada no site.' : 'Data retirada do site.'); loadDateWindow(); loadRules(); if (agendaDate === date) loadDay(); })
+            .catch(function (x) { cb.checked = !cb.checked; cb.disabled = false; fail(x); });
+        });
+      });
+    }).catch(fail);
+  }
   function loadDay() {
     var box = $('#ag-day');
     api('GET', '/api/admin/agenda?date=' + agendaDate).then(function (d) {
@@ -636,9 +666,9 @@
       on('block-day', function () {
         var reason = prompt('Motivo do bloqueio (ex.: Feriado). Pacientes já agendados continuam na lista.', 'Sem atendimento');
         if (reason === null) return;
-        api('PUT', '/api/admin/date-overrides/' + agendaDate, { is_blocked: true, reason: reason }).then(function () { toast('Data bloqueada.'); loadDay(); loadRules(); }).catch(fail);
+        api('PUT', '/api/admin/date-overrides/' + agendaDate, { is_blocked: true, reason: reason }).then(function () { toast('Data bloqueada.'); loadDay(); loadRules(); loadDateWindow(); }).catch(fail);
       });
-      on('unblock-day', function () { api('DELETE', '/api/admin/date-overrides/' + agendaDate).then(function () { toast('Data reaberta com o horário padrão.'); loadDay(); loadRules(); }).catch(fail); });
+      on('unblock-day', function () { api('DELETE', '/api/admin/date-overrides/' + agendaDate).then(function () { toast('Data reaberta com o horário padrão.'); loadDay(); loadRules(); loadDateWindow(); }).catch(fail); });
       on('special-day', function () { specialDayForm(ov); });
       on('add-slot', function () {
         var t = prompt('Horário extra (HH:MM):', '17:00'); if (!t) return;
@@ -707,7 +737,7 @@
         return '<li><span><b>' + esc(o.label) + '</b> — ' + (o.is_blocked ? 'bloqueada' + (o.reason ? ' (' + esc(o.reason) + ')' : '') : 'horário especial ' + (o.open_time || '') + '–' + (o.close_time || '')) + '</span><span class="btn-row"><button class="btn small" data-go="' + o.date + '">Ver</button><button class="btn small" data-del="' + o.date + '">Remover</button></span></li>';
       }).join('') + '</ul>' : '<p class="hint">Nenhuma exceção cadastrada.</p>';
       $$('#overrides [data-go]').forEach(function (b) { b.addEventListener('click', function () { agendaDate = b.getAttribute('data-go'); $('#ag-date').value = agendaDate; loadDay(); window.scrollTo({ top: 0, behavior: 'smooth' }); }); });
-      $$('#overrides [data-del]').forEach(function (b) { b.addEventListener('click', function () { api('DELETE', '/api/admin/date-overrides/' + b.getAttribute('data-del')).then(function () { toast('Exceção removida.'); loadRules(); loadDay(); }).catch(fail); }); });
+      $$('#overrides [data-del]').forEach(function (b) { b.addEventListener('click', function () { api('DELETE', '/api/admin/date-overrides/' + b.getAttribute('data-del')).then(function () { toast('Exceção removida.'); loadRules(); loadDay(); loadDateWindow(); }).catch(fail); }); });
     }).catch(fail);
   }
 

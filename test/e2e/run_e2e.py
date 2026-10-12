@@ -144,11 +144,14 @@ with sync_playwright() as p:
     pg.wait_for_timeout(300)
     pg.screenshot(path=str(SHOTS / "m-01-primeira-tela.png"))
     seats = pg.inner_text("[data-seats]")
+    st0, av0 = api(pub, "GET", "/api/availability")
+    total0 = av0["total"]
     # Quinta 10h: hoje 11:00–15:30 (8 horários × teto 3 = 24) + sexta (14 × 3 = 42) + sábado (14 × 3 = 42) = 108
     # Sem cota de campanha configurada: mensagem genérica (o total real 108 não vira número de destaque)
-    check("Selo compacto: AGENDAMENTOS ABERTOS · VAGAS DISPONÍVEIS (sem cota → mensagem genérica)", "AGENDAMENTOS ABERTOS" in seats and "VAGAS DISPONÍVEIS" in seats and "108" not in seats, seats.replace("\n", " "))
+    check("Selo compacto: AGENDAMENTOS ABERTOS · VAGAS DISPONÍVEIS (sem cota → mensagem genérica)", "AGENDAMENTOS ABERTOS" in seats and "VAGAS DISPONÍVEIS" in seats and str(total0) not in seats, seats.replace("\n", " "))
     check("Selo: ponto verde pulsante", pg.evaluate("() => getComputedStyle(document.querySelector('.seats-dot.is-live'), '::after').animationName") == "pulse")
-    check("Chamada dinâmica: escolha seu horário para hoje, amanhã ou sábado", "escolha seu horário para hoje, amanhã ou sábado" in pg.inner_text("[data-lede]"), pg.inner_text("[data-lede]"))
+    check("Chamada geral: escolha uma das datas e horários disponíveis (sem listar datas)", pg.inner_text("[data-lede]") == "Faça seu cadastro e escolha uma das datas e horários disponíveis.", pg.inner_text("[data-lede]"))
+    check("Janela: quinta a sábado + segunda a sábado da próxima semana, sem domingo", [d["date"] for d in av0["dates"]] == ["2026-10-08", "2026-10-09", "2026-10-10", "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17"], str([d["date"] for d in av0["dates"]]))
     title_visible = pg.locator(".chart-2").bounding_box()
     name_box = pg.locator('input[name="name"]').bounding_box()
     check("Mobile: oferta e início do formulário na primeira tela", name_box and name_box["y"] + name_box["height"] < 844 * 1.35, f"campo nome y={name_box and round(name_box['y'])}")
@@ -221,9 +224,11 @@ with sync_playwright() as p:
     check("Etapa 4: chamada ESCOLHA O MELHOR DIA PARA SEU EXAME", "ESCOLHA O MELHOR DIA PARA SEU EXAME" in pg.inner_text("#t4"))
     on_days = pg.locator(".calendar .cal-day.is-on")
     on_list = [on_days.nth(i).get_attribute("data-date") for i in range(on_days.count())]
-    check("Calendário: só hoje (08), amanhã (09) e sábado (10) clicáveis", on_list == ["2026-10-08", "2026-10-09", "2026-10-10"], str(on_list))
+    check("Calendário: só datas da janela com vagas clicáveis (08–10 e 12–17)", on_list == ["2026-10-08", "2026-10-09", "2026-10-10", "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17"], str(on_list))
     off = pg.locator(".calendar span.cal-day.is-off")
-    check("Calendário: demais dias visíveis e desabilitados", off.count() >= 25, str(off.count()))
+    off_dates = [off.nth(i).inner_text() for i in range(off.count())]
+    check("Calendário: passados, domingos (11, 18) e depois da próxima semana desabilitados", off.count() == 22 and "11" in off_dates and "18" in off_dates and "19" in off_dates and "7" in off_dates, str(off_dates))
+    check("Atalhos: no máximo 3 datas com vagas", pg.locator(".day-chip").count() == 3)
     check("Calendário: hoje com indicador", pg.locator('.cal-day.is-today[data-date="2026-10-08"]').count() == 1)
     wd = pg.inner_text(".cal-wd")
     check("Calendário: cabeçalho DOM…SÁB", all(x in wd for x in ["DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SÁB"]))
@@ -286,7 +291,7 @@ with sync_playwright() as p:
 
     # Vagas atualizadas
     st, av = api(pub, "GET", "/api/availability")
-    check("Contador atualizado após reserva (108 → 107)", av["total"] == 107, str(av["total"]))
+    check(f"Contador atualizado após reserva ({total0} → {total0 - 1})", av["total"] == total0 - 1, str(av["total"]))
     st, ag = api(admin, "GET", "/api/admin/agenda?date=2026-10-09")
     slot = [x for x in ag["slots"] if x["time"] == "09:30"][0]
     check("Agenda do painel: 09:30 com 1/3 ocupada", len(slot["patients"]) == 1 and slot["capacity"] == 3, json.dumps({k: slot[k] for k in slot if k != "patients"}))
@@ -706,7 +711,8 @@ with sync_playwright() as p:
         mc.close()
 
     # ------------------------------------------------------------------ Sem vagas: bloquear as duas datas
-    for d in ["2026-10-08", "2026-10-09", "2026-10-10"]:
+    st, win = api(admin, "GET", "/api/admin/date-window")
+    for d in [x["date"] for x in win["days"]]:
         api(admin, "PUT", f"/api/admin/date-overrides/{d}", {"is_blocked": True, "reason": "Teste sem vagas"})
     nc = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True, locale="pt-BR")
     npg = nc.new_page()

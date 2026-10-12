@@ -277,29 +277,12 @@
         : 'VAGAS DISPONÍVEIS';
     }
     el.innerHTML = '<span class="seats-dot' + dot + '" aria-hidden="true"></span><span class="seats-text"><strong class="seats-title">' + title + '</strong><span class="seats-count">' + count + '</span></span>';
-    var words = a.enabled && a.total > 0 ? dayWords() : '';
     var lede = $('[data-lede]');
-    if (words) { lede.innerHTML = 'Faça seu cadastro e escolha seu horário para <b></b>.'; lede.querySelector('b').textContent = words; }
+    if (a.enabled && a.total > 0) lede.innerHTML = 'Faça seu cadastro e escolha uma das <b>datas e horários disponíveis</b>.';
     else lede.textContent = a.waitlist
       ? 'No momento, todas as vagas foram preenchidas. Deixe seu cadastro na lista de espera e avisaremos quando abrirem novos horários.'
       : 'No momento, não há horários disponíveis. Novas datas serão abertas em breve.';
   }
-  // Uma palavra por data realmente selecionável (mesma regra do servidor): na sexta, "amanhã" já é o sábado;
-  // no sábado, o sábado oferecido é "o próximo sábado".
-  function dayWords() {
-    var a = availability, w = [];
-    var todayIso = a.now ? a.now.date : null;
-    var todaySat = todayIso ? new Date(todayIso + 'T12:00:00Z').getUTCDay() === 6 : false;
-    (a.dates || []).forEach(function (d) {
-      if (!d.available) return;
-      var k = d.kinds || [d.kind];
-      var x = d.isToday || k.indexOf('hoje') >= 0 ? 'hoje' : k.indexOf('amanha') >= 0 ? 'amanhã' : todaySat ? 'o próximo sábado' : 'sábado';
-      if (w.indexOf(x) < 0) w.push(x);
-    });
-    if (!w.length) return '';
-    return w.length === 1 ? w[0] : w.slice(0, -1).join(', ') + ' ou ' + w[w.length - 1];
-  }
-
   var CAL = '<svg class="cal" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3.5 9.8h17M8 3v4M16 3v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><rect x="7" y="12.6" width="3.4" height="3" rx=".8" fill="currentColor"/></svg>';
   var MONTHS = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
   var WD = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB'];
@@ -308,7 +291,8 @@
   function weekday(iso) { return new Date(iso + 'T12:00:00Z').getUTCDay(); }
   function vagas(n) { return n === 1 ? '1 vaga' : n + ' vagas'; }
 
-  // Calendário: só HOJE / AMANHÃ / SÁBADO com vagas reais ficam clicáveis; o resto aparece desabilitado.
+  // Calendário: só datas da janela (semana atual + próxima, seg–sáb) com vagas reais ficam clicáveis;
+  // passadas, domingos, fora da janela, bloqueadas no painel ou lotadas aparecem desabilitadas.
   function renderDates() {
     if (state.date && !(dateOption(state.date) || {}).available) { state.date = null; state.time = null; }
     var a = availability;
@@ -342,7 +326,8 @@
     }
     html += '</div>';
     // Atalhos grandes para as datas permitidas (mais fáceis de tocar que os dias do calendário).
-    var chips = (a.dates || []).map(function (o) {
+    // Até 3 atalhos: as próximas datas com vagas (o calendário mostra todas as datas da janela).
+    var chips = (a.dates || []).filter(function (o) { return o.available; }).slice(0, 3).map(function (o) {
       var p = o.date.split('-');
       var on = o.available;
       return '<button type="button" class="day-chip' + (state.date === o.date ? ' is-sel' : '') + (o.isToday ? ' is-today' : '') + '"' + (on ? ' data-date="' + o.date + '"' : ' disabled') + '>' +
@@ -354,7 +339,7 @@
     var picked = $('[data-cal-picked]');
     var po = dateOption(state.date);
     picked.hidden = !po;
-    if (po) picked.textContent = po.tag + ' · ' + po.label + ' · ' + vagas(po.remaining);
+    if (po) picked.textContent = (po.isToday || po.kind === 'amanha' ? po.tag + ' · ' : '') + po.label + ' · ' + vagas(po.remaining);
     save();
   }
 
@@ -371,7 +356,7 @@
   function renderTimes() {
     var d = dateOption(state.date);
     var box = $('[data-times]');
-    $('[data-chosen-date]').innerHTML = d ? CAL.replace('class="cal"', '') + '<span><b>' + d.tag + '</b> · ' + d.label + '</span>' : '';
+    $('[data-chosen-date]').innerHTML = d ? CAL.replace('class="cal"', '') + '<span>' + (d.isToday || d.kind === 'amanha' ? '<b>' + d.tag + '</b> · ' : '') + d.label + '</span>' : '';
     var note = $('[data-lead-note]');
     note.hidden = !(d && d.isToday);
     if (d && d.isToday) note.textContent = 'Para hoje, mostramos apenas horários com pelo menos ' + (availability.leadTime >= 60 && availability.leadTime % 60 === 0 ? (availability.leadTime / 60) + (availability.leadTime === 60 ? ' hora' : ' horas') : availability.leadTime + ' minutos') + ' de antecedência.';
